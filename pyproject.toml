@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "envelope-mcp"
+dynamic = ["version"]
+description = "Compact, zero-dependency MCP server that runs commands in bash, git-bash, PowerShell, cmd and other shells"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+envelope = "envelope.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "envelope.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["envelope*"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# Line length is the formatter's job; long string literals are left intact.
+ignore = ["SIM105", "RUF001", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Must stay parseable by old interpreters so the version check can run.
+"envelope/_pycheck.py" = ["UP"]
+# Executed standalone with -I -S; kept in plain, version-agnostic style.
+"envelope/execution/_shim.py" = ["UP031"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+include = ["envelope", "tests", "scripts"]
+typeCheckingMode = "standard"
+strict = ["envelope"]
+# Windows-only modules are type-checked for the platform they run on.
+reportUnnecessaryComparison = "none"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: runs real shells and processes",
+    "protocol: drives the MCP server over stdio",
+    "slow: takes more than a few seconds",
+]
