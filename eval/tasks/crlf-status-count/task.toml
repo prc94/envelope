@@ -1,0 +1,10 @@
+id = "crlf-status-count"
+version = 1
+category = "windows-core"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["scripts", "windows-core", "encoding", "large-output"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

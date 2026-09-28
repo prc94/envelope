@@ -1,0 +1,10 @@
+id = "git-merge-conflict"
+version = 1
+category = "windows-core"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["git", "windows-core", "errors", "hints", "known-gap"]
+baseline_eligible = false
+known_gaps = ["git-editor-default"]
+modifiable_paths = ["repo"]
+timeout = 600

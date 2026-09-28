@@ -1,0 +1,10 @@
+id = "cp1251-convert"
+version = 1
+category = "windows-core"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["encoding", "file-wrangling", "windows-core", "scripts"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = ["legacy"]
+timeout = 600

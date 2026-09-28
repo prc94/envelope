@@ -1,0 +1,2 @@
+PY=$(command -v python || command -v python3)
+"$PY" -c "print(sum('TIMEOUT' in l for l in open('app16.log', encoding='utf-16')))"

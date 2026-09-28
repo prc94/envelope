@@ -1,0 +1,10 @@
+id = "git-merge-editor"
+version = 1
+category = "known-gap"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["known-gap", "git", "errors", "hints"]
+baseline_eligible = false
+known_gaps = ["git-editor-default"]
+modifiable_paths = []
+timeout = 600

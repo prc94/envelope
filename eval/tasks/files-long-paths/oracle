@@ -1,0 +1,1 @@
+find archive -name '<<name>>' -exec head -n 1 {} \;

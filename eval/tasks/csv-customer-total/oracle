@@ -1,0 +1,2 @@
+PY=$(command -v python || command -v python3)
+"$PY" -c "import csv; print('%.2f' % sum(float(r['amount']) for r in csv.DictReader(open('orders.csv', encoding='utf-8-sig', newline='')) if r['customer'] == '<<customer>>'))"

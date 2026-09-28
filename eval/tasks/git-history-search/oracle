@@ -1,0 +1,1 @@
+git -C repo log -S<<needle>> --format=%H --reverse | head -1 | cut -c1-7

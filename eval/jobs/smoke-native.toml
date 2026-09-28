@@ -1,0 +1,40 @@
+# Smoke job: the whole pipeline on the Windows VM with two tasks, one model and three arms
+# (including a build variant). Declares the fingerprint the VM reports today (OEM 437).
+name = "smoke-native"
+seed = 1
+lanes = ["windows"]
+targets = ["vm"]
+harnesses = ["qwen-code"]
+models = ["qwen/qwen3.8-flash"]
+profile = "screening"
+trials = 1
+wall_clock_cap = 1800
+tasks = ["csv-middle-row"]
+
+[target.vm]
+kind = "ssh"
+host = "192.168.94.172"
+user = "envelope"
+python = "python"
+tools = ["qwen"]
+shell = "git-bash"
+root = 'C:\eval'
+# Windows evaluation licence: installed 2026-09-24, 90 days (docs/windows-test-vm.md).
+expires = 2026-12-23
+gateway_port = 18787
+gateway_local_port = 8787
+[target.vm.fingerprint]
+oemcp = 866
+acp = 1251
+[target.vm.fingerprint.versions]
+qwen = "0.24.5"
+
+[harness.qwen-code]
+adapter = "qwen-code"
+launch = ['C:\Program Files\nodejs\node.exe', 'C:\Program Files\nodejs\node_modules\@qwen-code\qwen-code\cli-entry.js']
+
+[[arms]]
+name = "native"
+kind = "native"
+tool_set = ["run_shell_command"]
+

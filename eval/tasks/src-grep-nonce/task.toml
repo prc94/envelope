@@ -1,0 +1,10 @@
+id = "src-grep-nonce"
+version = 1
+category = "output-budget"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["output-budget", "large-output", "grep"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

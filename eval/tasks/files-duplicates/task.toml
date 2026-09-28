@@ -1,0 +1,10 @@
+id = "files-duplicates"
+version = 1
+category = "windows-core"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["file-wrangling", "windows-core", "encoding"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = ["data"]
+timeout = 600

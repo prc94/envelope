@@ -1,0 +1,2 @@
+PY=$(command -v python || command -v python3)
+"$PY" -c "import re; print([re.search(r'req=(\w+)', l).group(1) for l in open('service-ru.log', encoding='cp1251') if '<<phrase>>' in l][0])"

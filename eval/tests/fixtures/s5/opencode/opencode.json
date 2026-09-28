@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "envelope": {
+      "type": "local",
+      "command": [
+        "/home/prc94/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12",
+        "/home/prc94/Projects/envelope/dist/envelope.pyz"
+      ],
+      "enabled": true,
+      "environment": {
+        "ENVELOPE_AUDIT_LOG": "/tmp/envelope-interop/opencode/audit.jsonl",
+        "ENVELOPE_SPOOL_DIR": "/tmp/envelope-interop/opencode/spool",
+        "ENVELOPE_DEFAULT_SHELL": "bash",
+        "ENVELOPE_DEFAULT_CWD": "/tmp/envelope-interop/opencode"
+      }
+    }
+  },
+  "tools": {
+    "bash": false,
+    "write": false,
+    "edit": false
+  },
+  "permission": {
+    "bash": "deny",
+    "edit": "deny"
+  }
+}

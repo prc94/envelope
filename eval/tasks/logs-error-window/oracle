@@ -1,0 +1,1 @@
+awk -v a='<<t1>>' -v b='<<t2>>' '$2>=a && $2<=b && $3=="ERROR"' service.log | wc -l | tr -d ' '

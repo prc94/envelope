@@ -1,0 +1,11 @@
+--- a/envelope/output/render.py	2026-09-26 01:37:36.716154886 +0300
++++ b/envelope/output/render.py	2026-09-26 01:37:36.717706587 +0300
+@@ -9,7 +9,7 @@
+ from envelope.output.spool import STDERR, SpoolReader
+ 
+ STDERR_MARK = "[stderr] "
+-HEAD_SHARE = 1 / 3
++HEAD_SHARE = 1 / 2
+ MARKER_RESERVE = 300
+ 
+ 

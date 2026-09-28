@@ -1,0 +1,7 @@
+mkdir -p sorted/spaced sorted/plain
+for f in inbox/*; do
+  case "$f" in
+    *" "*) mv -- "$f" sorted/spaced/ ;;
+    *) mv -- "$f" sorted/plain/ ;;
+  esac
+done

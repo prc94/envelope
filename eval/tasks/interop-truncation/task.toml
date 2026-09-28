@@ -1,0 +1,10 @@
+id = "interop-truncation"
+version = 1
+category = "interop"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["interop", "envelope-mechanics", "large-output", "output-budget", "head-tail", "truncation-recovery"]
+baseline_eligible = false
+known_gaps = []
+modifiable_paths = []
+timeout = 600

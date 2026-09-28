@@ -1,0 +1,10 @@
+id = "gitbash-cp866-dir"
+version = 1
+category = "known-gap"
+lanes = ["windows"]
+shells = ["git-bash"]
+tags = ["known-gap", "encoding", "windows-console"]
+baseline_eligible = false
+known_gaps = ["gitbash-no-codepage-fallback"]
+modifiable_paths = []
+timeout = 600

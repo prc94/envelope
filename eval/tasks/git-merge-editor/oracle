@@ -1,0 +1,1 @@
+git -C repo merge --no-edit feature

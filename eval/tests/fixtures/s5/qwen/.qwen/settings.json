@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "envelope": {
+      "command": "/home/prc94/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12",
+      "args": [
+        "/home/prc94/Projects/envelope/dist/envelope.pyz"
+      ],
+      "env": {
+        "ENVELOPE_AUDIT_LOG": "/tmp/envelope-interop/qwen/audit.jsonl",
+        "ENVELOPE_SPOOL_DIR": "/tmp/envelope-interop/qwen/spool",
+        "ENVELOPE_DEFAULT_SHELL": "bash",
+        "ENVELOPE_DEFAULT_CWD": "/tmp/envelope-interop/qwen"
+      }
+    }
+  },
+  "tools": {
+    "exclude": [
+      "run_shell_command"
+    ]
+  },
+  "$version": 4
+}

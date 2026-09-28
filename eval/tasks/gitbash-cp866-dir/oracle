@@ -1,0 +1,4 @@
+[
+  {"tool": "run", "arguments": {"command": "cmd //c \"dir /b docs\""}},
+  {"tool": "run", "arguments": {"command": "ls docs"}}
+]

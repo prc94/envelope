@@ -1,0 +1,1 @@
+cd logs && zcat -f svc.log* | grep -c ERROR

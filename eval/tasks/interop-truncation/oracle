@@ -1,0 +1,4 @@
+[
+  {"tool": "run", "arguments": {"command": "{{CODE}}"}},
+  {"tool": "output", "arguments": {"handle": "$handle", "grep": "TOKEN="}}
+]

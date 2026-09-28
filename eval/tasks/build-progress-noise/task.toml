@@ -1,0 +1,10 @@
+id = "build-progress-noise"
+version = 1
+category = "output-budget"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["output-budget", "heavy-scripts", "progress-noise"]
+baseline_eligible = false
+known_gaps = []
+modifiable_paths = []
+timeout = 600

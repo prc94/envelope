@@ -55,6 +55,87 @@ Original plan (kept for reference, not what was built):
 
 Layers 3–6 can be configured over SSH once `tools` exists.
 
+### Evaluation harness state (tasks 7.1-7.3, 2026-09-26)
+
+The snapshot chain continues past the layers above (all on Proxmox `mercury`, VMID 113, disk-only and quiesced):
+`snap-2026-09-25-node-qwen-verified` (Node.js and Qwen Code) → `snap-2026-09-26-pre-locale` (taken by the
+evaluation runner's operator right before the locale change; also holds the runner-created `C:\eval`) →
+**`snap-2026-09-26-eval-p2`, the P2 baseline for the evaluation harness.** It adds, over the previous state:
+system locale `ru-RU` set with `Set-WinSystemLocale` as `admin`, then a reboot (ACP 1251, OEMCP 866, locale
+0419; `chcp` in the `envelope` user's SSH session prints 866), and `LongPathsEnabled = 1`. The AppLocker rule set,
+the WDAC policy file and the Node/Qwen/Python/git binaries are byte-identical to before (checked by hash);
+`envelope doctor` reports code pages 866/1251 and all four shells' smoke tests pass; all 26 Windows task oracles
+pass. No OpenRouter key exists on the VM: a scan of 503,466 files under `C:\Users`, `C:\ProgramData`, `C:\eval`
+and the Node directory plus the machine and admin environments found none (the model key lives only in the
+gateway container, see `eval/gateway/README.md`). Autologon was not configured (only needed if the console
+calibration, task 8.1, requires an interactive session).
+
+Fingerprint of this state, as measured by `eval/launcher/fingerprint.py` through `SSHTarget.fingerprint()`
+(SHA-256 of the facts: OS build, code pages, locale, versions, binary, WDAC and AppLocker hashes):
+`203c004be4020683a7f5d64fca314bf8ae47f5abe8ba9c14c2ede0faa946228e`. Jobs declare the facts they require in `[target.vm.fingerprint]` and refuse to start on a mismatch.
+
+### Database clients: mongosh and redis-cli (task 12.2, 2026-09-29)
+
+Installed via `admin` SSH (`envelope` has no write access to `C:\Program Files`), verified against the real
+MongoDB/Redis containers task 12.1 set up on `envelope-linux`:
+
+- **mongosh 2.12.0** — official `mongosh-2.12.0-win32-x64.zip`, just `bin/mongosh.exe` extracted (not the
+  `mongosh_crypt_v1.dll` client-side field-level-encryption library; not needed here), SHA-256 verified against
+  the digest GitHub's release API reports for that asset. Installed to `C:\Program Files\mongosh\mongosh.exe`.
+- **redis-cli 5.0.14.1** — `tporadowski/redis` (the de facto standard native Windows port; Microsoft's own
+  fork is unmaintained), `Redis-x64-5.0.14.1.zip`, just `redis-cli.exe` extracted. This release predates
+  GitHub's asset-digest API, and the project publishes no separate checksum file, so there is no independent
+  hash to check against — downloaded over HTTPS from the project's own GitHub releases page (SHA-256 recorded
+  below for future reproducibility, not verified against a second source). Installed to
+  `C:\Program Files\redis\redis-cli.exe`.
+
+**WDAC scan-and-merge** (same procedure as task 13.2's Node.js/Qwen Code pass, this time via `admin`'s
+PowerShell over SSH, code sent on stdin to a non-interactive `powershell -Command -`, not as a `cmd`-quoted
+one-liner): `New-CIPolicy -ScanPath` over each new install directory, `Merge-CIPolicy` with the current
+`C:\wdac\enforced3.xml` listed first (so the merge keeps its `PolicyID`/`BasePolicyID`,
+`{C7E7FBA8-466C-4BA8-A701-8800DBC0F860}` — confirmed by parsing the merged XML before deploying, not assumed),
+`Set-RuleOption -Option 3 -Delete` (re-added by every merge, as task 13.2 already found), `ConvertFrom-CIPolicy`
+to `enforced4.cip`, copied over the active policy file. **No reboot needed:** the deployed policy carries
+`Enabled:Update Policy No Reboot`, so `Invoke-CimMethod -Namespace root\Microsoft\Windows\CI -ClassName
+PS_UpdateAndCompareCIPolicy -MethodName Update -Arguments @{FilePath=<the .cip>}` refreshed it live (returned
+0); the VM stayed reachable and responsive throughout. The previous active `.cip` was copied to
+`C:\wdac\active-backup.cip` first, as an in-OS rollback path distinct from the Proxmox snapshot.
+
+**Verified:** both binaries returned "The system cannot execute the specified program" as `envelope` before the
+WDAC update and ran normally after; `redis-cli.exe -h 127.0.0.1 -p 1 PING` and `mongosh --eval
+'db.adminCommand({ping:1})'` fail/succeed in the expected shape, confirming they are the real binaries, not a
+silently-blocked no-op. **Through the tunnels:** a two-hop chain — this host forwards its own loopback
+`16379`/`17017` to `envelope-linux`'s loopback-published container ports (task 12.1's `DatabaseAdmin.start()`,
+fixed during this task to join the containers to a second, non-internal network so `-p` publishing actually
+takes effect — see design.md), then reverse-tunnels those from this host into the VM's own loopback (same shape
+`SSHTarget.open_reverse_tunnel` gives the gateway) — carries `redis-cli.exe -h 127.0.0.1 -p 16379 -a
+<pw> PING` to `PONG` and `mongosh.exe --host 127.0.0.1 --port 17017 -u root -p <pw> --eval
+'db.adminCommand({ping:1})'` to `{ ok: 1 }`, run from git-bash on the VM (`C:\Program Files\Git\bin\bash.exe`).
+
+**Fingerprint after this state:** only the `wdac` fact changed (AppLocker, code pages, locale, Python/git/qwen
+hashes unchanged, checked): `.cip` SHA-256 `300eb4e96bfdfe5d5f010576223670311bce7efd15b63d56420f41300688a3d7`,
+whole-fingerprint digest `eaecc3821dab2944338a7dfca3e52e2d5716c19e191123c64ac7dce2496c580e`.
+**Snapshotted:** Proxmox `mercury`/VMID 113, `snap-2026-09-29-mongosh-redis` (quiesced, disk-only), child of
+`snap-2026-09-26-eval-p2`.
+
+Console calibration (task 8.1, result in design E8): to compare an interactive session with SSH-launched runs,
+autologon was set for `envelope` temporarily (`AutoAdminLogon`, `DefaultUserName`, `DefaultDomainName`,
+`DefaultPassword` under `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`, with the account's password
+reset to a random value that was never stored), the VM rebooted, `python -m envelope_eval calibrate` run, and then
+the values removed and the session logged off. **The `envelope` account's password is therefore unknown to everyone**;
+SSH key login is unaffected. To log in interactively again, reset it as `admin` (`net user envelope <new>`).
+
+Licence: Windows Enterprise LTSC evaluation, installed 2026-09-24 (registry `InstallDate`), so it ends about
+**2026-12-23** (90 days; `slmgr` only reports "Notification" for this build, not a date). Job files declare
+`expires` for the target and refuse to start within 3 days of it. Reverting a snapshot does not reset the clock.
+**Rebuild procedure:** install the evaluation ISO, create `admin` and `envelope` (standard user), install Python
+3.12, Git for Windows, PowerShell 7 and the QEMU guest agent, enable OpenSSH with the keys above, apply the
+AppLocker, GPO and WDAC layers in the order listed above (each verified and snapshotted), install Node.js and
+Qwen Code with their WDAC scan/merge passes, then apply this section's locale and long-path changes, reboot, and
+run a job's fingerprint check and `python -m envelope_eval` oracle gates before trusting it.
+
+
+
 ## Caveats
 
 - SSH sessions have no interactive console; envelope started by Qwen Code in a terminal

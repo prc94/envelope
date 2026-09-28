@@ -1,0 +1,112 @@
+# M1 decision job, DeepSeek only, pinned to DeepInfra (Sail Research rejected its tool-call JSON). Companion to m1-decision.toml.
+# Windows lane, Qwen Code, the three models the provider guardrail allows, the default arm, two
+# output-budget arms and one head/tail build variant, on the tasks tagged output-budget.
+name = "m1-deepseek-pinned"
+seed = 20260927
+lanes = ["windows"]
+targets = ["vm"]
+harnesses = ["qwen-code"]
+models = ["deepseek/deepseek-v4-flash-0731"]
+profile = "decision"
+trials = 5
+# Twelve hours: the arms are interleaved in a random order, so a job stopped by the cap is still a
+# balanced (smaller) experiment, and the report prints the interval width actually achieved.
+wall_clock_cap = 43200
+tasks = ["tag:output-budget"]
+
+[target.vm]
+kind = "ssh"
+host = "192.168.94.172"
+user = "envelope"
+python = "python"
+tools = ["qwen"]
+shell = "git-bash"
+root = 'C:\eval'
+# Windows evaluation licence: installed 2026-09-24, 90 days (docs/windows-test-vm.md).
+expires = 2026-12-23
+gateway_port = 18787
+gateway_local_port = 8787
+
+# What the job requires of the VM before it starts (see docs/windows-test-vm.md). It refuses to
+# run on a mismatch: the Russian system locale (OEM 866, ANSI 1251) of task 7.2 is part of the
+# target's identity.
+[target.vm.fingerprint]
+oemcp = 866
+acp = 1251
+[target.vm.fingerprint.versions]
+qwen = "0.24.5"
+
+[harness.qwen-code]
+adapter = "qwen-code"
+launch = ['C:\Program Files\nodejs\node.exe', 'C:\Program Files\nodejs\node_modules\@qwen-code\qwen-code\cli-entry.js']
+
+[variant.head-half]
+patch = "eval/variants/head-half.patch"
+
+[[arms]]
+name = "default"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+
+[[arms]]
+name = "budget-small"
+kind = "envelope"
+tags = ["output-budget"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+settings = { ENVELOPE_OUTPUT_MAX_CHARS = "6000", ENVELOPE_OUTPUT_MAX_LINES = "200" }
+
+[[arms]]
+name = "budget-large"
+kind = "envelope"
+tags = ["output-budget"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+settings = { ENVELOPE_OUTPUT_MAX_CHARS = "24000", ENVELOPE_OUTPUT_MAX_LINES = "800" }
+
+[[arms]]
+name = "headtail-half"
+kind = "envelope"
+variant = "head-half"
+tags = ["head-tail"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+
+# Adopt a budget when success is not worse than the default by more than five points and the
+# median tokens fall by at least fifteen percent; adopt the head/tail split when success is not
+# worse and tokens do not rise. Every rule is evaluated per (model, task) stratum.
+[[decision_rules]]
+name = "adopt-budget-small"
+arm = "budget-small"
+versus = "default"
+[[decision_rules.conditions]]
+metric = "success"
+kind = "noninferiority"
+margin = 0.05
+[[decision_rules.conditions]]
+metric = "tokens"
+kind = "improvement"
+margin = 0.15
+
+[[decision_rules]]
+name = "adopt-budget-large"
+arm = "budget-large"
+versus = "default"
+[[decision_rules.conditions]]
+metric = "success"
+kind = "noninferiority"
+margin = 0.05
+[[decision_rules.conditions]]
+metric = "tokens"
+kind = "improvement"
+margin = 0.15
+
+[[decision_rules]]
+name = "adopt-headtail-half"
+arm = "headtail-half"
+versus = "default"
+[[decision_rules.conditions]]
+metric = "success"
+kind = "noninferiority"
+margin = 0.05
+[[decision_rules.conditions]]
+metric = "tokens"
+kind = "improvement"
+margin = 0.0

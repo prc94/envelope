@@ -1,0 +1,8 @@
+results/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+# Incidental nested repos inside the S5 fixture copies (task 1.2): the interop workspaces they
+# were copied from happened to be git-initialized; nothing reads these, and git refuses to track
+# a directory containing another repo's .git as a plain subtree.
+tests/fixtures/s5/*/.git/

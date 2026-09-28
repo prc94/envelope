@@ -1,0 +1,20 @@
+[
+  {
+    "harness": "qwen",
+    "model": "z-ai/glm-5.3-flash",
+    "scenario": "truncation",
+    "ok": false,
+    "checks": {
+      "answer": false,
+      "run_called": false,
+      "output_tool": false
+    },
+    "exit": null,
+    "seconds": 600.1,
+    "run_calls": 0,
+    "output_calls": 0,
+    "coercions": 0,
+    "tool_errors": 0,
+    "answer": ""
+  }
+]

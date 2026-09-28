@@ -1,0 +1,10 @@
+id = "logs-last-traceback"
+version = 1
+category = "output-budget"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["output-budget", "head-tail", "large-output", "errors", "logs"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

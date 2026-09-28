@@ -1,0 +1,9 @@
+PY=$(command -v python || command -v python3)
+"$PY" - <<'PY'
+import glob
+for path in glob.glob('legacy/*.txt'):
+    with open(path, encoding='cp1251', newline='') as fh:
+        text = fh.read()
+    with open(path, 'w', encoding='utf-8', newline='') as fh:
+        fh.write(text)
+PY

@@ -1,0 +1,10 @@
+id = "canary"
+version = 1
+category = "canary"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["canary", "cwd-env"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 300

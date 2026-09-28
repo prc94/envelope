@@ -1,0 +1,1 @@
+grep '^<<id>>,' metrics.csv | cut -d, -f4

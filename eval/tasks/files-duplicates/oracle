@@ -1,0 +1,1 @@
+cd data && LC_ALL=C sha256sum -- * | LC_ALL=C sort | awk '{ if ($1 == prev) print substr($0, 67); prev = $1 }' | while IFS= read -r f; do rm -- "$f"; done

@@ -1,0 +1,10 @@
+id = "csv-middle-row"
+version = 1
+category = "output-budget"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["output-budget", "head-tail", "large-output"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

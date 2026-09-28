@@ -1,0 +1,9 @@
+{"harness": "qwen", "model": "qwen/qwen3.8-flash", "scenario": "basic", "ok": true, "checks": {"answer": true, "run_called": true}, "exit": 0, "seconds": 27.4, "run_calls": 2, "output_calls": 2, "coercions": 0, "tool_errors": 1, "answer": "interop-42"}
+{"harness": "qwen", "model": "qwen/qwen3.8-flash", "scenario": "truncation", "ok": true, "checks": {"answer": true, "run_called": true, "output_tool": true}, "exit": 0, "seconds": 14.0, "run_calls": 1, "output_calls": 1, "coercions": 0, "tool_errors": 0, "answer": "17017"}
+{"harness": "qwen", "model": "qwen/qwen3.8-flash", "scenario": "long", "ok": true, "checks": {"answer": true, "run_called": true, "long_run": true}, "exit": 0, "seconds": 54.3, "run_calls": 1, "output_calls": 0, "coercions": 0, "tool_errors": 0, "answer": "finished-5"}
+{"harness": "qwen", "model": "z-ai/glm-5.3-flash", "scenario": "basic", "ok": true, "checks": {"answer": true, "run_called": true}, "exit": 0, "seconds": 6.8, "run_calls": 1, "output_calls": 0, "coercions": 0, "tool_errors": 0, "answer": "interop-42"}
+{"harness": "qwen", "model": "z-ai/glm-5.3-flash", "scenario": "truncation", "ok": false, "checks": {"answer": false, "run_called": false, "output_tool": true}, "exit": null, "seconds": 600.1, "run_calls": 1, "output_calls": 1, "coercions": 0, "tool_errors": 0, "answer": ""}
+{"harness": "qwen", "model": "z-ai/glm-5.3-flash", "scenario": "long", "ok": true, "checks": {"answer": true, "run_called": true, "long_run": true}, "exit": 0, "seconds": 63.5, "run_calls": 1, "output_calls": 0, "coercions": 0, "tool_errors": 0, "answer": "finished-5"}
+
+5/6 passed; details in /tmp/envelope-interop/results.json and /tmp/envelope-interop/logs/
+exit=1

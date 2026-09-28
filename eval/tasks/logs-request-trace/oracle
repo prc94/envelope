@@ -1,0 +1,2 @@
+rid=$(grep ' 500 ' nginx.log | grep '"GET <<path>> ' | grep -o 'rid=[a-f0-9]*' | cut -d= -f2)
+grep "\"rid\": \"$rid\"" app.jsonl | grep -o '"user": "[a-z.]*"' | cut -d'"' -f4

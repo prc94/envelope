@@ -1,0 +1,10 @@
+id = "logs-request-trace"
+version = 1
+category = "windows-core"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["logs", "windows-core", "large-output", "errors"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600
