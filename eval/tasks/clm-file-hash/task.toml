@@ -1,0 +1,10 @@
+id = "clm-file-hash"
+version = 1
+category = "lockdown"
+lanes = ["windows"]
+shells = ["powershell"]
+tags = ["lockdown-hints", "windows-console"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 300

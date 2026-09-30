@@ -1,0 +1,10 @@
+id = "mongo-error-window"
+version = 1
+category = "database"
+lanes = ["windows"]
+shells = ["git-bash"]
+tags = ["database", "mongo", "large-output", "windows-core"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

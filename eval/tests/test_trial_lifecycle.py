@@ -15,7 +15,7 @@ from envelope_eval.adapters.base import Trajectory
 from envelope_eval.runner.lifecycle import Gates, TrialRunner
 from envelope_eval.runner.planner import Arm, Trial
 from envelope_eval.runner.results import ResultWriter, read_results
-from envelope_eval.runner.trial import TrialExecutor, UnitResult, Workspace
+from envelope_eval.runner.trial import TrialExecutor, UnitResult, Workspace, trial_id
 from envelope_eval.tasks import load_task
 
 TOOLS = ("mcp__envelope__run", "mcp__envelope__output")
@@ -191,6 +191,21 @@ def make(tmp_path, harness, arm_kind="envelope", tasks=None):
 
 def trial(index=0, model="m", task="canary", target="vm"):
     return Trial(index, "windows", task, "default", 100 + index, target, "fake", model)
+
+
+def test_probe_trial_ids_are_unique_per_cell_not_just_per_index():
+    # Gates._run_canaries always probes with index -1/-2 regardless of which cell (harness+model)
+    # it is checking; since the gateway's ledger is keyed by trial id alone, two cells sharing a
+    # probe index must still get different ids or one cell's canary would read another's ledger
+    # rows back (invisible with one harness, since every probe then expects the same tools; a
+    # real bug once cells can expect different ones -- task 14.1).
+    qwen = Trial(-1, "linux", "canary", "default", 1, "t", "qwen-code", "m")
+    opencode = Trial(-1, "linux", "canary", "default", 1, "t", "opencode", "m")
+    assert trial_id("job", qwen) != trial_id("job", opencode)
+    other_model = Trial(-1, "linux", "canary", "default", 1, "t", "qwen-code", "other-m")
+    assert trial_id("job", qwen) != trial_id("job", other_model)
+    # Real trials (index >= 0) are already unique by index alone; format is unchanged.
+    assert trial_id("job", trial(0)) == "job-t00000"
 
 
 def test_full_lifecycle_passes_and_cleans_up(tmp_path):
@@ -451,6 +466,26 @@ def test_a_declared_secret_found_on_the_target_is_infra_before_the_agent_runs(tm
     assert leaked["attribution"] == "infra" and "notes.txt" in leaked["error"]
     assert "KEY-1234" not in leaked["error"]  # locations only
     assert target.events.count("unit") == 1  # the second trial never reached the agent
+
+
+def test_a_redact_only_secret_is_not_confinement_checked_but_is_still_redacted(tmp_path):
+    """A database task's connection credentials (task 13.1) are legitimately reachable on the
+    target -- declaring them under `redact` must not trip the confinement check `secrets` does,
+    but must still end up in `trial_secrets` for report redaction."""
+    task = tmp_path / "tasks" / "creds"
+    shutil.copytree(CANARY, task)
+    (task / "generate.py").write_text(
+        "from pathlib import Path\n"
+        "def generate(out, seed):\n"
+        "    Path(out).mkdir(parents=True, exist_ok=True)\n"
+        "    return {'answer': 'x', 'redact': ['hunter2']}\n"
+    )
+    executor, target, _ = make(tmp_path, good_harness(), tasks={"canary": load_task(task)})
+    searched: list[list[str]] = []
+    target.find_secrets = lambda ws, secrets: searched.append(secrets) or []  # type: ignore[attr-defined]
+    result = executor(trial())
+    assert searched == []  # never checked: a redact-only secret is expected to be reachable
+    assert result["passed"] and result["trial_secrets"] == ["tok-0", "hunter2"]
 
 
 def test_tools_the_model_was_offered_outside_the_configured_set_make_the_trial_infra(tmp_path):

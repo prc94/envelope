@@ -1,0 +1,1 @@
+cp /c/Windows/System32/whoami.exe ./tool-copy.exe && ./tool-copy.exe; printf 'EXITCODE=%s\n' "$?"

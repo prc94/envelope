@@ -1,0 +1,1 @@
+grep -F -n -f needle.txt haystack.txt | cut -d: -f1

@@ -45,7 +45,7 @@ def _diff(declared: dict[str, Any], measured: dict[str, Any], prefix: str) -> li
     return out
 
 
-def verify_fingerprint(name: str, target: Target, declared: dict[str, Any]) -> Fingerprint:
+def verify_fingerprint(name: str, target: Fingerprintable, declared: dict[str, Any]) -> Fingerprint:
     """Measure `target` and refuse (raise) on any mismatch with the job's declaration."""
     measured = target.fingerprint()
     bad = measured.mismatches(declared)
@@ -54,8 +54,11 @@ def verify_fingerprint(name: str, target: Target, declared: dict[str, Any]) -> F
     return measured
 
 
-class Target(Protocol):
+class Fingerprintable(Protocol):
+    def fingerprint(self) -> Fingerprint: ...
+
+
+class Target(Fingerprintable, Protocol):
     def run(self, argv: list[str], timeout: float | None = None) -> tuple[int, bytes, bytes]: ...
     def put(self, source: Path, destination: str) -> None: ...
     def get(self, source: str, destination: Path) -> None: ...
-    def fingerprint(self) -> Fingerprint: ...

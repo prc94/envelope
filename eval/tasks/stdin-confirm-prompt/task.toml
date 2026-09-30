@@ -1,0 +1,10 @@
+id = "stdin-confirm-prompt"
+version = 1
+category = "envelope-mechanics"
+lanes = ["windows"]
+shells = ["git-bash"]
+tags = ["envelope-mechanics", "errors"]
+baseline_eligible = false
+known_gaps = []
+modifiable_paths = []
+timeout = 300

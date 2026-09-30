@@ -1,0 +1,66 @@
+# M2 Linux screening job (task 14.1): a representative slice of the Linux-lane suite (not the
+# full 27 tasks -- a screening job is a cheap sanity check, not a decision job; the interop-*
+# tasks are included so their verdicts can be compared with S5), both harnesses, the three models
+# the provider guardrail allows, the default arm and a harness-specific native-shell baseline, 3
+# trials per cell.
+name = "screening-linux"
+seed = 20260929
+lanes = ["linux"]
+targets = ["linux"]
+harnesses = ["qwen-code", "opencode"]
+models = ["deepseek/deepseek-v4-flash-0731", "qwen/qwen3.8-flash", "z-ai/glm-5.3-flash"]
+profile = "screening"
+trials = 3
+wall_clock_cap = 28800
+tasks = [
+    "canary",
+    "interop-basic",
+    "interop-long",
+    "interop-truncation",
+    "git-log-ticket",
+    "files-duplicates",
+    "redis-session-count",
+]
+
+[target.linux]
+kind = "docker"
+host = "192.168.94.41"
+user = "envelope"
+python = "python3"
+key = "/home/prc94/.config/envelope-eval/linux_ed25519"
+known_hosts = "/home/prc94/.config/envelope-eval/linux_known_hosts"
+image = "envelope-eval-linux:2026-09-29"
+network = "envelope-eval"
+gateway_port = 8787
+gateway_local_port = 8787
+databases = true
+[target.linux.fingerprint]
+image_digest = "sha256:d672194e49d9bab3656067d41c9c19e76d12b4e258ba5646162f6876e1e87436"
+docker_version = "26.1.5+dfsg1"
+
+[harness.qwen-code]
+adapter = "qwen-code"
+launch = ["qwen"]
+
+[harness.opencode]
+adapter = "opencode"
+launch = ["opencode"]
+
+[[arms]]
+name = "default"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+
+[[arms]]
+name = "native-qwen"
+kind = "native"
+tool_set = ["run_shell_command"]
+
+[[arms]]
+name = "native-opencode"
+kind = "native"
+tool_set = ["bash"]
+
+[support.arms]
+native-qwen = ["qwen-code"]
+native-opencode = ["opencode"]

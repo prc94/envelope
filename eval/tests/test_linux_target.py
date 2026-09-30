@@ -242,3 +242,17 @@ def test_fingerprint_reports_the_image_digest_and_docker_version():
     ssh.shell_result = (0, b"sha256:abc123\n", b"")
     fp = t.fingerprint()
     assert fp.facts["image_digest"] == "sha256:abc123"
+
+
+def test_network_gateway_reports_the_trial_networks_own_bridge_address():
+    t, ssh = target()
+    ssh.shell_result = (0, b"172.18.0.1\n", b"")
+    assert t.network_gateway() == "172.18.0.1"
+    assert "network inspect" in ssh.shell[-1] or "docker network inspect" in ssh.shell[-1]
+
+
+def test_network_gateway_raises_when_the_network_has_no_gateway():
+    t, ssh = target()
+    ssh.shell_result = (0, b"\n", b"")
+    with pytest.raises(RuntimeError, match="no gateway address"):
+        t.network_gateway()

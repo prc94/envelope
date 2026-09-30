@@ -1,0 +1,56 @@
+# Smoke job for the new `docker`/OpenCode job wiring (task 14.1): both harnesses, one model, the
+# default arm plus each harness's own native arm, one database-backed task, one trial each. Run
+# for real before the full screening-linux.toml job, the same way smoke.toml preceded m1-decision.
+name = "smoke-linux"
+seed = 1
+lanes = ["linux"]
+targets = ["linux"]
+harnesses = ["qwen-code", "opencode"]
+models = ["qwen/qwen3.8-flash"]
+profile = "screening"
+trials = 1
+wall_clock_cap = 1800
+tasks = ["canary", "redis-session-count"]
+
+[target.linux]
+kind = "docker"
+host = "192.168.94.41"
+user = "envelope"
+python = "python3"
+key = "/home/prc94/.config/envelope-eval/linux_ed25519"
+known_hosts = "/home/prc94/.config/envelope-eval/linux_known_hosts"
+image = "envelope-eval-linux:2026-09-29"
+network = "envelope-eval"
+gateway_port = 8787
+gateway_local_port = 8787
+databases = true
+[target.linux.fingerprint]
+image_digest = "sha256:d672194e49d9bab3656067d41c9c19e76d12b4e258ba5646162f6876e1e87436"
+docker_version = "26.1.5+dfsg1"
+
+[harness.qwen-code]
+adapter = "qwen-code"
+launch = ["qwen"]
+
+[harness.opencode]
+adapter = "opencode"
+launch = ["opencode"]
+
+[[arms]]
+name = "default"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+
+[[arms]]
+name = "native-qwen"
+kind = "native"
+tool_set = ["run_shell_command"]
+
+[[arms]]
+name = "native-opencode"
+kind = "native"
+tool_set = ["bash"]
+
+[support.arms]
+native-qwen = ["qwen-code"]
+native-opencode = ["opencode"]

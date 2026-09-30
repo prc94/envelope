@@ -1,0 +1,10 @@
+id = "cmd-long-pattern-search"
+version = 1
+category = "shell-mechanics"
+lanes = ["windows"]
+shells = ["git-bash", "cmd", "powershell"]
+tags = ["windows-console", "large-output"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 300

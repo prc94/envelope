@@ -8,11 +8,13 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from ..adapters import QwenAdapter
+from ..adapters import OpenCodeAdapter, QwenAdapter
 from ..adapters.base import Adapter
-from ..targets import SSHTarget, WindowsTrialTarget
+from ..targets import LinuxTrialTarget, SSHTarget, WindowsTrialTarget
 from ..targets.base import verify_fingerprint
 from ..tasks.loader import TaskSuite
+from .databases import DEFAULT_CONFIG as DEFAULT_DB_CONFIG
+from .databases import DatabaseAdmin, admin_from_config
 from .driver import ExecutorKey, Runtime
 from .gateway import client_from_config
 from .lifecycle import GateFailure, Gates
@@ -111,58 +113,58 @@ def build_runtime(
     fingerprints: dict[str, Any] = {}
     ssh_targets: list[SSHTarget] = []
     oracles: dict[str, Callable[[Trial], tuple[bool, str]]] = {}
+    dbs: dict[str, DatabaseAdmin] = {}
     scratch = out / "scratch"
     for target_name in job.targets:
         cfg = _table(job, "target", target_name)
         check_licence(target_name, cfg)
-        if cfg.get("kind", "ssh") != "ssh" or not cfg.get("windows", True):
-            raise JobConfigError(
-                f"target {target_name!r}: only Windows ssh targets are wired so far"
+        kind = cfg.get("kind", "ssh")
+        if kind == "ssh" and cfg.get("windows", True):
+            unit, ssh, gateway_url, remote, fp_target = _build_windows_target(
+                job, cfg, target_name, artifacts, out, log
             )
-        ssh = SSHTarget(
-            str(cfg["host"]),
-            str(cfg["user"]),
-            windows=True,
-            python=str(cfg.get("python", "python")),
-            tools=tuple(cfg.get("tools", ())),  # type: ignore[arg-type]
-        )
-        log(f"measuring the fingerprint of {target_name}")
+        elif kind == "docker":
+            unit, ssh, gateway_url, remote, fp_target, db = _build_linux_target(
+                job, cfg, target_name, artifacts, out, log
+            )
+            if db is not None:
+                dbs[target_name] = db
+        else:
+            raise JobConfigError(
+                f"target {target_name!r}: only Windows ssh and Linux docker targets are wired so far"
+            )
         fingerprints[target_name] = verify_fingerprint(
             target_name,
-            ssh,
+            fp_target,
             dict(cfg.get("fingerprint", {})),  # type: ignore[arg-type]
         ).facts
-        root = str(cfg.get("root", "C:\\eval"))
-        vm = WindowsTrialTarget(ssh, root=root, python=ssh.python)
-        vm.setup()
-        remote = {}
-        for name, artifact in artifacts.items():
-            remote[name] = f"{root}\\envelope-{name}.pyz"
-            ssh.put(artifact, remote[name])
-        ssh.open_reverse_tunnel(
-            int(cfg.get("gateway_local_port", 8787)), int(cfg.get("gateway_port", 18787))
-        )
         ssh_targets.append(ssh)
-        gateway_url = f"http://127.0.0.1:{int(cfg.get('gateway_port', 18787))}/v1"
+        default_shell = "bash" if kind == "docker" else "git-bash"
         oracle_runner = OracleRunner(
-            vm,
+            unit,
             tasks,
             scratch / f"oracle-{target_name}",
             python=ssh.python,
-            oracle_script=f"{root}\\launcher\\oracle.py",
-            envelope=remote[DEFAULT_VARIANT]
-            if DEFAULT_VARIANT in remote
-            else next(iter(remote.values())),
-            shell=str(cfg.get("shell", "git-bash")),
+            oracle_script=remote["oracle_script"],
+            envelope=remote.get(DEFAULT_VARIANT) or next(iter(remote.values())),
+            shell=str(cfg.get("shell", default_shell)),
             job=f"{job.name}-oracle",
+            db=dbs.get(target_name),
         )
         oracles[target_name] = oracle_runner.check()
         for harness_name in job.harnesses:
             hcfg = _table(job, "harness", harness_name)
             for arm in job.arms:
                 adapter = _adapter(hcfg, ssh.python, remote[arm.variant or DEFAULT_VARIANT])
+                # OpenCode's title agent (small_model, E4) uses the *same* model id as the main
+                # request, so declaring it here as its own auxiliary_models entry would classify
+                # every request for that model as auxiliary (`is_auxiliary`'s model-id check short
+                # -circuits before its own `saw_tools and not body.get("tools")` fallback, which is
+                # what actually tells the two apart for a same-model case): zeroes out
+                # main_model_turns/tokens for every trial instead of just the tool-less one.
+                # auxiliary_models is for a *different* auxiliary model id; OpenCode needs none.
                 executors[(target_name, harness_name, arm.name)] = TrialExecutor(
-                    vm,
+                    unit,
                     adapter,
                     gateway,
                     tasks,
@@ -170,6 +172,7 @@ def build_runtime(
                     job=job.name,
                     gateway_url=gateway_url,
                     scratch=scratch / target_name,
+                    db=dbs.get(target_name),
                 )
 
     def execute(trial: Trial) -> dict[str, Any]:
@@ -192,6 +195,9 @@ def build_runtime(
     def close() -> None:
         for ssh in ssh_targets:
             ssh.close_tunnels()
+        for target_name, db in dbs.items():
+            log(f"garbage-collecting database objects for {job.name} on {target_name}")
+            db.gc(job.name)
 
     return Runtime(
         executors=executors,
@@ -211,9 +217,103 @@ def build_runtime(
 
 def _adapter(harness: dict[str, Any], python: str, envelope_pyz: str) -> Adapter:
     kind = harness.get("adapter", "qwen-code")
-    if kind != "qwen-code":
-        raise JobConfigError(f"harness adapter {kind!r} is not implemented yet")
-    return QwenAdapter(
-        launch=list(harness["launch"]),
-        envelope_command=[python, envelope_pyz],
+    if kind == "qwen-code":
+        return QwenAdapter(
+            launch=list(harness["launch"]),
+            envelope_command=[python, envelope_pyz],
+        )
+    if kind == "opencode":
+        return OpenCodeAdapter(
+            launch=list(harness["launch"]),
+            envelope_command=[python, envelope_pyz],
+        )
+    raise JobConfigError(f"harness adapter {kind!r} is not implemented yet")
+
+
+def _build_windows_target(
+    job: Job,
+    cfg: dict[str, Any],
+    target_name: str,
+    artifacts: dict[str, Path],
+    out: Path,
+    log: Callable[[str], None],
+) -> tuple[WindowsTrialTarget, SSHTarget, str, dict[str, str], SSHTarget]:
+    ssh = SSHTarget(
+        str(cfg["host"]),
+        str(cfg["user"]),
+        windows=True,
+        python=str(cfg.get("python", "python")),
+        tools=tuple(cfg.get("tools", ())),  # type: ignore[arg-type]
     )
+    log(f"measuring the fingerprint of {target_name}")
+    root = str(cfg.get("root", "C:\\eval"))
+    vm = WindowsTrialTarget(ssh, root=root, python=ssh.python)
+    vm.setup()
+    remote = {}
+    for name, artifact in artifacts.items():
+        remote[name] = f"{root}\\envelope-{name}.pyz"
+        ssh.put(artifact, remote[name])
+    remote["oracle_script"] = f"{root}\\launcher\\oracle.py"
+    ssh.open_reverse_tunnel(
+        int(cfg.get("gateway_local_port", 8787)), int(cfg.get("gateway_port", 18787))
+    )
+    gateway_url = f"http://127.0.0.1:{int(cfg.get('gateway_port', 18787))}/v1"
+    return (
+        vm,
+        ssh,
+        gateway_url,
+        remote,
+        ssh,
+    )  # Windows: fingerprint the raw host, not WindowsTrialTarget
+
+
+def _build_linux_target(
+    job: Job,
+    cfg: dict[str, Any],
+    target_name: str,
+    artifacts: dict[str, Path],
+    out: Path,
+    log: Callable[[str], None],
+) -> tuple[
+    LinuxTrialTarget, SSHTarget, str, dict[str, str], LinuxTrialTarget, DatabaseAdmin | None
+]:
+    """A `docker` target: one trial container per trial on a remote Docker host, reached the same
+    way the Windows lane's model gateway is -- a reverse tunnel, but bound to the trial network's
+    own bridge gateway address (task 10.1), since a trial container has no route to the runner
+    host's own loopback. `LinuxTrialTarget` supports only one envelope build at a time (it always
+    copies a fixed `envelope.pyz` into every container, task 13's live verifications never needed
+    more than the default variant): a job with a non-default variant on a docker target is refused
+    rather than silently running the wrong build."""
+    if set(artifacts) - {DEFAULT_VARIANT}:
+        raise JobConfigError(
+            f"target {target_name!r}: docker targets only support the default envelope variant "
+            f"(LinuxTrialTarget copies one fixed envelope.pyz into every trial container)"
+        )
+    ssh = SSHTarget(
+        str(cfg["host"]),
+        str(cfg["user"]),
+        windows=False,
+        python=str(cfg.get("python", "python3")),
+        key=cfg.get("key"),
+        known_hosts=cfg.get("known_hosts"),
+    )
+    log(f"measuring the fingerprint of {target_name}")
+    image = str(cfg["image"])
+    network = str(cfg.get("network", "envelope-eval"))
+    linux = LinuxTrialTarget(ssh, image, network=network, python=ssh.python)
+    linux.setup(envelope_pyz=artifacts.get(DEFAULT_VARIANT))
+    remote = {
+        DEFAULT_VARIANT: "/home/trial/envelope.pyz",
+        "oracle_script": "/home/trial/oracle.py",
+    }
+    bridge = linux.network_gateway()
+    gateway_port = int(cfg.get("gateway_port", 8787))
+    ssh.open_reverse_tunnel(int(cfg.get("gateway_local_port", 8787)), gateway_port, bind=bridge)
+    gateway_url = f"http://{bridge}:{gateway_port}/v1"
+    db = None
+    if cfg.get("databases"):
+        db = admin_from_config(ssh, cfg.get("database_config", DEFAULT_DB_CONFIG))
+        log(f"starting shared database servers for {target_name}")
+        db.start(network)
+        db.gc(job.name)  # an earlier interrupted run of this same job name, if any
+    return linux, ssh, gateway_url, remote, linux, db

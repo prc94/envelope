@@ -9,6 +9,7 @@ from typing import Any
 
 from ..adapters.oracle import OracleAdapter
 from ..tasks.loader import Task
+from .databases import DatabaseAdmin
 from .planner import Arm, Trial
 from .trial import TrialExecutor, UnitTarget
 
@@ -43,6 +44,7 @@ class OracleRunner:
     envelope: str
     shell: str | None = None
     job: str = "oracle"
+    db: DatabaseAdmin | None = None
     results: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def run(self, task_id: str, seed: int = 1) -> dict[str, Any]:
@@ -63,6 +65,7 @@ class OracleRunner:
             job=self.job,
             gateway_url="",
             scratch=self.scratch,
+            db=self.db,
         )
         trial = Trial(0, "", task_id, "oracle", seed, "", "oracle", "")
         record = executor(trial)

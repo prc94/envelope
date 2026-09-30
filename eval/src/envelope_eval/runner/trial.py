@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -109,8 +110,17 @@ def stage(name: str) -> Iterator[None]:
 
 
 def trial_id(job: str, trial: Trial) -> str:
-    prefix = "c" if trial.index < 0 else "t"
-    return f"{job}-{prefix}{abs(trial.index):05d}"
+    """A probe (negative index: canary and oracle gates) must be unique per *cell*
+    (harness+model), not just per (job, index): `Gates._run_canaries` always probes with index
+    -1/-2 regardless of which cell it is checking, and the gateway's ledger is keyed by this id
+    alone (`ledger.for_trial`), so two cells sharing a job and probe index would otherwise read
+    each other's tool-offering and cost data back -- harmless while every cell expected the same
+    tools (a single-harness job), but a real, silent contamination once cells can expect
+    different tool sets (multiple harnesses, task 14.1)."""
+    if trial.index < 0:
+        cell = hashlib.sha256(f"{trial.harness}:{trial.model}".encode()).hexdigest()[:8]
+        return f"{job}-c{abs(trial.index):05d}-{cell}"
+    return f"{job}-t{abs(trial.index):05d}"
 
 
 @dataclass
@@ -316,6 +326,7 @@ class TrialExecutor:
             "known_gaps": list(task.known_gaps),
             "generator_secrets": (
                 list(generation.answer_key.get("secrets", []))
+                + list(generation.answer_key.get("redact", []))
                 if isinstance(generation.answer_key, dict)
                 else []
             ),
@@ -344,7 +355,12 @@ class TrialExecutor:
     def _confine(self, ws: Workspace, answer_key: Any) -> None:
         """Fail the attempt if a secret the generator declared (`{"secrets": [...]}` in its
         answer key: answers, seeds) is already reachable on the target, where the agent could
-        read it. Targets that cannot search (no `find_secrets`) skip the check."""
+        read it. Targets that cannot search (no `find_secrets`) skip the check.
+
+        A generator that legitimately hands the agent a credential (a database task's
+        connection details, task 13.1) declares it under `{"redact": [...]}` instead: still
+        folded into `generator_secrets`/`trial_secrets` for report redaction, but never checked
+        here, since it is expected to be reachable."""
         secrets = answer_key.get("secrets") if isinstance(answer_key, dict) else None
         search = getattr(self.target, "find_secrets", None)
         if not secrets or search is None:

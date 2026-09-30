@@ -1,0 +1,10 @@
+id = "applocker-blocked-copy"
+version = 1
+category = "lockdown"
+lanes = ["windows"]
+shells = ["git-bash"]
+tags = ["lockdown-hints", "errors", "windows-core"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 300

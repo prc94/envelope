@@ -18,15 +18,30 @@ from __future__ import annotations
 
 import secrets
 import time
+import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 REDIS_IMAGE = "redis:8"
 MONGO_IMAGE = "mongo:8"
+DEFAULT_CONFIG = Path.home() / ".config" / "envelope-eval" / "databases.toml"
 
 
 class DatabaseError(RuntimeError):
     pass
+
+
+def admin_from_config(ssh: AdminTransport, path: str | Path = DEFAULT_CONFIG) -> DatabaseAdmin:
+    """`DatabaseAdmin` for the shared servers using the admin password persisted at `path`
+    (mirrors `gateway.client_from_config`'s `gateway.toml`). A stable, reusable credential is
+    required here and not just generated per call: `start()` is idempotent and leaves an
+    already-running container alone, so a caller minting its own random password would simply
+    have the wrong one for every admin call against a server someone else already started."""
+    data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    return DatabaseAdmin(
+        ssh, data["redis_admin_password"], data["mongo_admin_user"], data["mongo_admin_password"]
+    )
 
 
 class AdminTransport(Protocol):
@@ -156,6 +171,17 @@ class DatabaseAdmin:
         raise DatabaseError(f"mongo did not accept authenticated connections within {timeout:.0f}s")
 
     # -- redis ---------------------------------------------------------------------------------
+
+    def redis_admin_password(self) -> str:
+        """The server's `requirepass` value, authenticating as the `default` user (task 13.4).
+
+        The Windows lane's pinned `redis-cli` (5.0.14.1, `tporadowski/redis`, predates Redis ACL
+        entirely: no `--user` flag, `AUTH <user> <pass>`, so it can never authenticate as a
+        `redis_user()` ACL account, only single-argument `AUTH <pass>` as `default`) has to use
+        this instead of a per-trial account. Windows trials run serially on one VM (design.md
+        E12), so there is no concurrent-trial isolation loss in using the shared credential; key
+        namespacing (`<prefix>:*`) still keeps trials' data apart."""
+        return self._redis_pw
 
     def _redis_cli(self, *args: str, timeout: float = 30) -> tuple[int, bytes, bytes]:
         return self.ssh.run(

@@ -142,6 +142,13 @@ def test_redis_user_scopes_the_acl_to_the_prefixs_own_keys_without_dangerous_com
     assert creds.password and creds.password != "rpw"
 
 
+def test_redis_admin_password_is_the_requirepass_value():
+    # The Windows lane's pinned redis-cli (5.0.14.1) predates Redis ACL and has no `--user` flag,
+    # so Windows database tasks (13.4) authenticate with this instead of a per-trial ACL account.
+    a, _ = admin()
+    assert a.redis_admin_password() == "rpw"
+
+
 def test_redis_delete_scans_and_deletes_matching_keys_then_the_user():
     def handler(argv):
         if "--scan" in argv:

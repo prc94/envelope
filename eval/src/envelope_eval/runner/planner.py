@@ -35,6 +35,9 @@ class Job:
     decision_rules: tuple[dict[str, object], ...] = ()
     target_support: dict[str, tuple[str, ...]] = field(default_factory=dict)
     harness_support: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Which harnesses an arm applies to (e.g. two harness-specific native arms, each with its own
+    # native tool name); an arm absent here runs for every harness, as before.
+    arm_support: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Tables the driver reads: `target.<name>`, `harness.<name>`, `variant.<name>`, `gateway`.
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -80,6 +83,7 @@ def load_job(path: str | Path) -> Job:
         decision_rules=tuple(data.get("decision_rules", [])),
         target_support={k: tuple(v) for k, v in support.get("targets", {}).items()},
         harness_support={k: tuple(v) for k, v in support.get("harnesses", {}).items()},
+        arm_support={k: tuple(v) for k, v in support.get("arms", {}).items()},
         extra={
             k: data[k] for k in ("target", "harness", "variant", "gateway", "baseline") if k in data
         },
@@ -111,6 +115,11 @@ def plan_trials(
                             if arm.tags and not (arm.tags & task_tags.get(task, set())):
                                 continue
                             if arm.kind == "native" and not baseline_eligible.get(task, False):
+                                continue
+                            if (
+                                job.arm_support.get(arm.name)
+                                and harness not in job.arm_support[arm.name]
+                            ):
                                 continue
                             for _ in range(job.trials):
                                 pending.append((lane, task, arm.name, target, harness, model))

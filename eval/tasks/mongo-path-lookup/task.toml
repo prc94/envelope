@@ -1,0 +1,10 @@
+id = "mongo-path-lookup"
+version = 1
+category = "database"
+lanes = ["windows"]
+shells = ["git-bash"]
+tags = ["database", "mongo", "windows-core"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

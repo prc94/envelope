@@ -39,6 +39,26 @@ def test_planner_filters_unsupported_target_and_harness():
     )
 
 
+def test_planner_restricts_an_arm_to_the_harnesses_it_supports():
+    from envelope_eval.runner.planner import Job
+
+    job = Job(
+        "job",
+        1,
+        ("linux",),
+        ("a",),
+        (Arm("native-qwen", kind="native"), Arm("native-opencode", kind="native")),
+        targets=("t",),
+        harnesses=("qwen", "opencode"),
+        models=("m",),
+        arm_support={"native-qwen": ("qwen",), "native-opencode": ("opencode",)},
+    )
+    trials = plan_trials(job, baseline_eligible={"a": True})
+    by_harness = {t.harness: t.arm for t in trials}
+    assert len(trials) == 2
+    assert by_harness == {"qwen": "native-qwen", "opencode": "native-opencode"}
+
+
 def test_finish_job_fails_on_any_finding_and_reports_only_locations(tmp_path: Path):
     class Scanner:
         def scan(self, root):

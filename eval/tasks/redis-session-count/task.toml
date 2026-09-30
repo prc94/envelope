@@ -1,0 +1,10 @@
+id = "redis-session-count"
+version = 1
+category = "database"
+lanes = ["linux"]
+shells = ["bash"]
+tags = ["database", "redis"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

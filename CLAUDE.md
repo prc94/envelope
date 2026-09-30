@@ -23,7 +23,8 @@ scripts/dev.sh test tests/unit/test_output.py -k grep     # single file / test
 scripts/dev.sh test -m "not slow"   # skip slow tests (markers: integration, protocol, slow)
 python3.12 scripts/build.py         # -> dist/envelope.pyz (stdlib zipapp)
 python3.12 -m envelope doctor [--json]
-python3 scripts/interop.py [--harness opencode qwen] [--model ID] [--scenario basic truncation long]
+PYTHONPATH=eval/src python3.12 -m envelope_eval plan eval/jobs/<job>.toml   # show what a job would run
+PYTHONPATH=eval/src python3.12 -m envelope_eval run eval/jobs/<job>.toml   # run it (real model spend)
 ```
 
 Async tests need no plugin: `tests/conftest.py` runs `async def` tests with `asyncio.run`. Integration tests start a real `python -m envelope` over stdio (`tests/integration/client.py`, `StdioClient`) with isolated `XDG_*` dirs and assert against the JSONL audit log.
@@ -47,9 +48,6 @@ Request flow for `run`: `protocol/server.py` → `tools/run.py` → `tools/coerc
 
 Work is spec-driven with OpenSpec (`openspec/`; `/opsx:*` commands and `openspec-*` skills in `.claude/`). The active change is `openspec/changes/add-envelope-core/` (P0 spikes + P1 core): `tasks.md` tracks status; `design.md` holds the decisions (D1–D14), spike outcomes and the roadmap (P2 evaluation harness → P3a/P3b background & interactive → P4 security classifier). Each later phase is proposed as its own change just before it is built. Mark a task `[x]` only when its stated verification has actually been done (several remain open pending a Windows/macOS host or CI). Windows test VM plan: `docs/windows-test-vm.md`.
 
-## Interop runs
+## Evaluation harness
 
-`scripts/interop.py` drives OpenCode and Qwen Code via OpenRouter against `dist/envelope.pyz`. Score from envelope's audit log, not from the model's answer. Harness pitfalls handled there:
-- OpenCode needs `--dir` and a pinned `small_model`; otherwise its title agent calls Gemini, which the OpenRouter key's guardrail blocks.
-- Qwen Code silently substitutes models for `qwen/...` ids in `modelProviders`, so select via `OPENAI_*` env.
-- Qwen Code project MCP servers need `qwen mcp approve envelope`.
+`eval/` (a separate `uv` project, not bound by the stdlib-only rule; `openspec/changes/add-evaluation-harness/`) runs a task suite through real agent harnesses (Qwen Code, OpenCode) against real models via a recording proxy in front of OpenRouter (`eval/gateway/`), and scores trials from envelope's audit log, harness transcripts and recorded model traffic — not from the model's own answer alone. One host runner drives every lane through a target interface: `ssh` (the Windows test VM) and `docker` (Linux, one container per trial). `eval/tasks/README.md` documents task authoring; `eval/jobs/*.toml` are job definitions (`plan`/`run`/`report` above). Harness pitfalls the adapters handle: OpenCode needs `--dir` and a pinned `small_model` (its title agent otherwise calls a model outside the gateway token's allowed set); Qwen Code is non-bare with a full tool-exclusion list and `memory.*` disabled (its hidden managed-memory agent otherwise gets shell tools regardless of `--exclude-tools`) and is selected through `OPENAI_*` env since it substitutes models for `qwen/...` ids. `scripts/interop.py`, the harness's throwaway predecessor, is retired (task 14.3).

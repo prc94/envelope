@@ -1,0 +1,10 @@
+id = "redis-inventory-count"
+version = 1
+category = "database"
+lanes = ["windows"]
+shells = ["git-bash"]
+tags = ["database", "redis", "windows-core"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

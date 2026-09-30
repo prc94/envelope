@@ -84,14 +84,14 @@
 
 ## 13. Full suite
 
-- [ ] 13.1 Write the Linux core tasks (large output, long-running, errors and hints, heavy scripts, cwd/env, git, logs, file wrangling, scripts and grep, Mongo, Redis, interop parity); verify all oracles pass on the Linux lane and the coverage report shows no missing Linux area
+- [x] 13.1 Write the Linux core tasks (large output, long-running, errors and hints, heavy scripts, cwd/env, git, logs, file wrangling, scripts and grep, Mongo, Redis, interop parity); verify all oracles pass on the Linux lane and the coverage report shows no missing Linux area
 - [x] 13.2 Write the Windows git and log-digging tasks (history search, merge, UTF-16LE, CP1251 and rotated logs, multi-file tracing); verify oracles pass on the VM
 - [x] 13.3 Write the Windows file-wrangling, scripts and grep tasks (Cyrillic and spaced names, duplicates, CSV, CP1251 conversion, long paths, CRLF pipelines); verify oracles pass on the VM
-- [ ] 13.4 Write the Windows database tasks (large result sets, authentication, `/`-prefixed arguments, bare client start); verify oracles pass on the VM
-- [ ] 13.5 Write the Windows edge tasks (CP866 alone and mixed, application-control exit 126, Constrained Language Mode, cmd line limit and shell choice, long-running and stdin prompts, errors and hints, cwd/env); verify oracles pass on the VM and the coverage report shows no missing Windows area
+- [x] 13.4 Write the Windows database tasks (large result sets, authentication, `/`-prefixed arguments, bare client start); verify oracles pass on the VM
+- [x] 13.5 Write the Windows edge tasks (CP866 alone and mixed, application-control exit 126, Constrained Language Mode, cmd line limit and shell choice, long-running and stdin prompts, errors and hints, cwd/env); verify oracles pass on the VM and the coverage report shows no missing Windows area
 
 ## 14. Integration
 
-- [ ] 14.1 Run a screening job on the Linux lane (Qwen Code and OpenCode, three models, default and native arms, 3 trials); verify the report is complete and labelled exploratory, contains no provider key, and the interop parity tasks are comparable with S5
-- [ ] 14.2 Run a screening job on the Windows lane (Qwen Code, three models, default and native arms, 3 trials, split per model if needed to respect the wall-clock cap); verify the report is complete and known gaps appear under their ids
-- [ ] 14.3 Retire `scripts/interop.py` and update README and CLAUDE.md (commands, interop and evaluation sections) to point at `eval/`; verify a repository search finds no remaining references and the documented evaluation commands run as written
+- [x] 14.1 Run a screening job on the Linux lane (Qwen Code and OpenCode, three models, default and native arms, 3 trials); verify the report is complete and labelled exploratory, contains no provider key, and the interop parity tasks are comparable with S5
+- [x] 14.2 Run a screening job on the Windows lane (Qwen Code, three models, default and native arms, 3 trials, split per model if needed to respect the wall-clock cap); verify the report is complete and known gaps appear under their ids
+- [x] 14.3 Retire `scripts/interop.py` and update README and CLAUDE.md (commands, interop and evaluation sections) to point at `eval/`; verify a repository search finds no remaining references and the documented evaluation commands run as written

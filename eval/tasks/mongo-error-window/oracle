@@ -1,0 +1,26 @@
+PY=$(command -v python || command -v python3)
+"$PY" - <<'PY'
+import subprocess
+
+env = {}
+for line in open("mongo.env"):
+    line = line.strip()
+    if line and "=" in line:
+        k, v = line.split("=", 1)
+        env[k] = v
+
+script = (
+    "db.getSiblingDB(%r).events.countDocuments("
+    "{level:'ERROR', ts:{$gte:<<start>>, $lte:<<end>>}})" % env["MONGO_DB"]
+)
+out = subprocess.run(
+    [
+        "C:/Program Files/mongosh/mongosh.exe", "--quiet",
+        "--host", env["MONGO_HOST"], "--port", env["MONGO_PORT"],
+        "-u", env["MONGO_USER"], "-p", env["MONGO_PASSWORD"],
+        "--authenticationDatabase", env["MONGO_DB"], "--eval", script,
+    ],
+    capture_output=True, text=True, check=True,
+)
+print(out.stdout.strip().splitlines()[-1])
+PY

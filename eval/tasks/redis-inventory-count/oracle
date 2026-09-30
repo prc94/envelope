@@ -1,0 +1,27 @@
+PY=$(command -v python || command -v python3)
+"$PY" - <<'PY'
+import subprocess
+
+env = {}
+for line in open("redis.env"):
+    line = line.strip()
+    if line and "=" in line:
+        k, v = line.split("=", 1)
+        env[k] = v
+
+base = [
+    "C:/Program Files/redis/redis-cli.exe", "-h", env["REDIS_HOST"], "-p", env["REDIS_PORT"],
+    "-a", env["REDIS_PASSWORD"], "--no-auth-warning",
+]
+pattern = "<<key_prefix>>:item:*"
+# Not "--scan --pattern": that mode produces no output at all on this Windows build of redis-cli
+# (5.0.14.1, confirmed empty through both git-bash and PowerShell, with or without a pattern) --
+# see design.md's task 13.4 entry. KEYS works and the fixture is small enough for it to be fine.
+keys = subprocess.run(base + ["KEYS", pattern], capture_output=True, text=True, check=True).stdout.split()
+count = 0
+for key in keys:
+    value = subprocess.run(base + ["GET", key], capture_output=True, text=True, check=True).stdout.strip()
+    if value == "in-stock":
+        count += 1
+print(count)
+PY

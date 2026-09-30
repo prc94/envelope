@@ -94,6 +94,22 @@ class LinuxTrialTarget:
         if envelope_pyz is not None:
             self.ssh.put(envelope_pyz, f"{self._launcher}/envelope.pyz")
 
+    def network_gateway(self) -> str:
+        """The trial network's own bridge gateway address (not the default `docker0` bridge's,
+        which trial containers cannot reach: they join this `internal` network, task 10.1). The
+        model gateway and the shared database containers are reached from inside a trial
+        container at this address, not loopback; wiring a job binds its reverse tunnel to it
+        rather than to a hardcoded, deployment-specific value."""
+        out = self._must(
+            f"docker network inspect {self.network} "
+            "--format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'",
+            "network inspect",
+        )
+        gateway = out.decode().strip()
+        if not gateway:
+            raise RuntimeError(f"docker network {self.network!r} has no gateway address")
+        return gateway
+
     # -- UnitTarget ------------------------------------------------------------------------
 
     def prepare(self, trial_id: str) -> Workspace:

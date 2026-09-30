@@ -560,3 +560,224 @@ task 13.2's WDAC work didn't need to check this since it never risked a mismatch
 build's deployed policy carries `Enabled:Update Policy No Reboot`, so `Invoke-CimMethod
 PS_UpdateAndCompareCIPolicy` refreshes a redeployed `.cip` live; no `citool` (that's Windows 11 22H2+) and no
 reboot were needed, unlike the original `wdac` layer's own bring-up.
+
+### Linux core tasks (task 13.1, 2026-09-29)
+
+The Linux lane already had a `large-output`/`long-running`/`errors`/`hints`/`heavy-scripts`/`cwd-env`/git/
+logs/file-wrangling/scripts-and-grep/interop-parity task for every required area (the task 8.x/13.2/13.3
+tasks already declare `lanes = ["linux", "windows"]`), just never run live on the Linux target; the actual
+gap was Mongo and Redis tasks. Added `redis-session-count` (count active-session keys under a per-trial ACL
+prefix) and `mongo-customer-total` (sum `amount_cents` for one customer in a per-trial-scoped database),
+both `lanes = ["linux"]`, generators provisioning fixtures directly against `DatabaseAdmin.redis_user`/
+`mongo_user` (task 12.1) via `db.ssh.run(docker exec ... redis-cli|mongosh ...)`, connection details written
+to a `*.env` fixture file, oracles as a `python3` heredoc (list-argv `subprocess.run`, no shell quoting of
+Mongo's `$match`/`$sum` operators).
+
+**Two bugs found only by wiring a real database-backed task, neither exercised by task 12.1's own
+verification** (which ran `DatabaseAdmin` directly, never through a generator/oracle):
+1. **`TrialExecutor._confine` and `generator_secrets` shared one answer-key field (`secrets`).** A database
+   task's connection credentials are legitimately reachable in the workspace (the agent needs them) but
+   `secrets` is also what the pre-agent confinement scan must find *absent*; declaring the password there
+   made every database trial fail as `infra` before the agent ever started. Fixed: a second field,
+   `{"redact": [...]}`, folds into `generator_secrets`/`trial_secrets` (report redaction) like `secrets`
+   does, but is never passed to the confinement scan (`trial.py`, both `_confine` and the `generator_secrets`
+   construction; test added: `test_a_redact_only_secret_is_not_confinement_checked_but_is_still_redacted`).
+2. **`OracleRunner` never accepted a `DatabaseAdmin` at all**, so no oracle — not even a throwaway one —
+   could exercise a database-backed generator; `generate_task`'s `db=` reached every other caller but this
+   one. Fixed: `OracleRunner.db: DatabaseAdmin | None = None`, forwarded to the `TrialExecutor` it builds.
+
+**Live verification:** `envelope-eval-linux:2026-09-29` (rebuilt from `eval/docker/Dockerfile` with
+`mongodb-mongosh` 2.12.0, added via MongoDB's own apt repo, and `redis-tools` 8.0.2, from Debian's own repo,
+per the same install-approval step as task 12.2's Windows clients). All 27 Linux-lane task oracles, including
+the two new database tasks, pass live against `envelope-eval-linux` (`LinuxTrialTarget`) and the real
+`envelope-eval-redis`/`envelope-eval-mongo` containers; the lane's coverage report lists every required area
+with at least one task and flags none missing. No leftover trial containers after the run (`docker ps -a`
+shows only the two long-lived database containers). `eval/tests/test_task_oracles.py`'s host-only smoke test
+now skips generators that declare a `db` parameter (detected by inspecting `generate`'s signature, the same
+check `generate_task` itself makes) with a pointer to this live verification, since that test has no
+`DatabaseAdmin` of its own and is not meant to reach the shared Linux-lane containers.
+
+### Windows database tasks (task 13.4, 2026-09-29)
+
+Three tasks against the shared Mongo/Redis containers through the two-hop tunnel chain
+`docs/windows-test-vm.md` records: `mongo-error-window` (large result sets: ~2,500-3,200 `events`
+documents, count `ERROR`s in a time window), `mongo-path-lookup` (a query filter value that
+literally begins with `/`, exercising the suite-coverage list's "arguments starting with `/`"),
+and `redis-inventory-count` (authentication, mirroring 13.1's `redis-session-count` on the
+Windows client). "Bare client start" gets no dedicated task: every database task already risks it
+as a natural agent behavior (an agent that runs `mongosh`/`redis-cli` with no arguments), so it is
+measured as a property of existing trials, not built as its own scenario.
+
+**Three bugs found only by running live against the real Windows `mongosh.exe`/`redis-cli.exe`,
+past what 12.2's own client-install verification (`PING`/`db.adminCommand` only) exercised:**
+1. **`ssh`'s own argv has a length limit the generator can hit before the remote command does.**
+   `mongo-error-window`'s ~3,000-document `insertMany` as an inline `--eval` argv string failed
+   locally with `[Errno 7] Argument list too long` constructing the `ssh` child process, never
+   reaching the network. Fixed: the script travels on `docker exec -i`'s stdin instead (`mongosh`
+   reads a script from stdin when none is given and stdin is not a tty); `mongo-customer-total`
+   and `mongo-path-lookup` stay on `--eval`, small enough not to need this.
+2. **A generator that fails after partially provisioning a database resource leaks it under the
+   oracle's own fixed trial id.** Not a new bug -- `OracleRunner.run` always uses trial index 0,
+   so every task run through one `OracleRunner` shares one trial id (`<job>-t00000`), and the
+   `db.gc(job_prefix)` sweep documented in task 12.1 as the safety net for exactly this case is
+   only called at real job start/end, never by a throwaway oracle script. The Mongo user
+   `mongo-error-window`'s bug (1) left behind under `oracle-t00000` then collided with
+   `mongo-path-lookup`'s own `db.mongo_user("oracle-t00000")` with `MongoServerError: User
+   already exists`. Not fixed in the framework (this is the documented, intended failure mode);
+   the live-verification script now calls `db.gc("oracle")` before each attempt, the same
+   sweep a real job would run at its own start.
+3. **The pinned Windows `redis-cli` (5.0.14.1, `tporadowski/redis`) has no `--user` flag at
+   all** -- it predates Redis ACL entirely (`redis-cli --help` lists only `-a <password>`, no
+   `--user`/`AUTH user pass`), so `redis-inventory-count`'s first version (a `redis_user()`
+   per-trial ACL account, exactly like the Linux lane's `redis-session-count`) failed with
+   `Unrecognized option or bad number of args for: '--user'` the moment it tried to authenticate.
+   Fixed: `DatabaseAdmin.redis_admin_password()` (new) exposes the server's shared `requirepass`
+   value for Windows-lane Redis tasks to authenticate as `default` with single-argument `AUTH`;
+   Windows trials run serially on one VM (design.md E12), so the shared credential costs no real
+   per-trial isolation in practice, and key namespacing (`<prefix>:*`) still keeps trials' data
+   apart. A fourth, separate finding from the same debugging session, not a bug but a real client
+   limitation worth recording for future Windows Redis tasks: **`redis-cli --scan --pattern`
+   produces no output at all on this build**, confirmed empty through both git-bash and
+   PowerShell, with or without a pattern, while plain `KEYS pattern` works; `redis-inventory-count`'s
+   oracle uses `KEYS` (the fixture is small enough that `KEYS`'s O(N) cost does not matter here).
+
+**Live verification:** all three tasks' oracles pass against the real Windows VM (`WindowsTrialTarget`,
+git-bash shell) and the real `envelope-eval-mongo`/`envelope-eval-redis` containers reached through the
+tunnel chain; the VM's `C:\eval\trials` directory has no leftover trial state after the run, and
+`db.gc("oracle")` before and after shows no leaked Mongo/Redis objects.
+
+### Windows edge tasks (task 13.5, 2026-09-29)
+
+Four tasks, each verified against a real mechanism on the VM rather than assumed from the design's
+prose, since three of the four turned out not to work the way a first guess suggested:
+
+- **`applocker-blocked-copy`** (application control -> exit 126): no host-supplied fixture --
+  System32 binaries can't be generated on a Linux host, so the instruction has the agent copy
+  `C:\Windows\System32\whoami.exe` into its own workspace (outside AppLocker's allow-listed
+  paths) and execute the copy. Confirmed live before writing the task: `git-bash`'s
+  `/permission denied/` -> POSIX exit 126 convention for a copy AppLocker's Exe rule blocks, vs.
+  `cmd`'s own `.cmd`-script block (a different code path, GPO text + exit 1 in `git-bash`, not
+  126) -- the task specifically needs an **Exe** rule violation, not a Script one.
+- **`clm-file-hash`** (Constrained Language Mode): almost written around
+  `[System.IO.File]::WriteAllBytes(...)`, discovered live to itself be the thing CLM blocks
+  (`Cannot invoke method. Method invocation is supported only on core types in this language
+  mode.`) -- useful as a finding but not what the task needed to *measure*, so the task instead
+  asks for a `Get-FileHash` computation (a core cmdlet, unaffected by CLM) over a host-generated
+  `payload.bin`. Its oracle needed an explicit per-step `"shell": "powershell"` in the JSON-steps
+  oracle format (`launcher/oracle.py`'s `setdefault` lets a step's own `shell` win over the
+  runner's `--shell` default) since `OracleRunner` and real job wiring both default every task in
+  a run to one shell (`git-bash`) -- confirmed by reading `wiring.py`, not assumed.
+- **`cmd-long-pattern-search`** (cmd's line limit, shell choice): the first design used `findstr
+  /g:` (file-based patterns, meant to dodge cmd's ~8,191-character line limit) with an
+  8,500-character needle; live, `findstr` itself refused with `Search string too long` --a
+  separate, smaller internal buffer limit, unrelated to the line-length claim the task is about.
+  Fixed by using `grep -F -f` (fixed-string, pattern-from-file) in `git-bash` instead, confirmed
+  live to have no such limit.
+- **`stdin-confirm-prompt`** (stdin prompts, envelope mechanics, `baseline_eligible = false`):
+  confirmed from `envelope/execution/{posix,windows}.py` (`stdin=subprocess.PIPE if stdin else
+  subprocess.DEVNULL`) rather than assumed, that a `run` call without a `stdin` argument gives the
+  child `DEVNULL`, which resolves to immediate `EOFError` for a Python `input()` call -- fast and
+  deterministic, not a hang, so the task safely relies on the agent needing to notice the prompt
+  and supply `stdin` to answer it, with no timeout risk either way.
+
+**"CP866 alone and mixed"**: no new task for "mixed". Envelope's only git-bash decoding gap today
+is "no code page handling at all" (`shells/launch.py`: git-bash's `Launch` has `console_codepage=False`
+unconditionally) -- CP866 bytes are replaced by U+FFFD whether they appear alone or interleaved with
+UTF-8 in the same stream, so a "mixed" fixture would demonstrate the identical `gitbash-no-codepage-fallback`
+gap `gitbash-cp866-dir` (task 8.4) already covers, not a distinct failure mode; the "mixed" case only
+becomes a materially different test once a future fix adds real code-page detection (design.md's context
+notes: switching a whole stream's decoding at once "would mis-decode mixed git-bash streams if simply
+enabled"), which is out of scope for this change. **"Bare client start"** likewise gets no dedicated
+task, per the same reasoning recorded in the task 13.4 entry.
+
+**Live verification:** all 33 Windows-lane task oracles (the pre-existing ones plus these four) pass
+together in one run against the real VM; the coverage report lists every required area
+(`canary`/`large-output`/`long-running`/`errors`/`hints`/`heavy-scripts`/`cwd-env`) with at least one task
+and flags none missing; `C:\eval\trials` has no leftover state from the run afterward.
+
+### Job wiring for the `docker` target and OpenCode, and the Linux/Windows screening jobs (tasks 14.1, 14.2, 2026-09-29)
+
+`runner/wiring.py`'s `build_runtime` only ever built Windows `ssh` targets (every M2 live verification
+from 10.1 onward ran a throwaway script instead, as design.md keeps noting): running a real *job* file
+end-to-end on the Linux lane needed that finished. Added: a `docker`-kind branch (`_build_linux_target`)
+alongside the existing Windows one, reusing `LinuxTrialTarget` and reaching the model gateway through a
+reverse tunnel bound to the trial network's own bridge address (`LinuxTrialTarget.network_gateway()`, new,
+queries `docker network inspect` rather than hardcoding the deployment's current `172.18.0.1`) instead of
+loopback; an `opencode` case in `_adapter`; a persistent `~/.config/envelope-eval/databases.toml` (mirrors
+`gateway.toml`) since `DatabaseAdmin.start()` is idempotent and a job minting its own random admin password
+would simply have the wrong one for an already-running shared container; and `Job.arm_support` (mirrors the
+existing `target_support`/`harness_support`), since Qwen's and OpenCode's native arms need different
+`tool_set`s (`run_shell_command` vs `bash`) and nothing previously let an arm apply to only some harnesses.
+`LinuxTrialTarget` copies one fixed `envelope.pyz` into every container regardless of arm, so
+`_build_linux_target` refuses a job that asks a docker target for a non-default variant rather than
+silently running the wrong build.
+
+**Three real bugs found only by running an actual job through this new path — a `smoke-linux.toml` job
+(both harnesses, one model, the default arm, each harness's own native arm, one database task, one trial
+each), the same role `smoke.toml` played before `m1-decision.toml`, not a throwaway script — none of them
+reachable by the single-harness, single-shell-family jobs every earlier throwaway verification used:**
+
+1. **Canary-probe trial ids collided across cells.** `Gates._run_canaries` always probes with index -1/-2
+   regardless of which cell (harness, model) it is checking, and `trial_id()` built the id from `(job,
+   index)` alone; the gateway's ledger is keyed by that id (`ledger.for_trial`), so two cells sharing a job
+   and probe index read each other's tool-offering and cost data back. Invisible in every earlier job (M1:
+   one harness, so every probe expected the same tools regardless of which model's cell it belonged to) --
+   surfaced the moment a second harness with a different expected tool set existed: an OpenCode cell's
+   canary check failed with `model was offered tools outside the configured set: ['run_shell_command']`,
+   Qwen's native tool name, read back from a *different* cell's probe that happened to run first. Fixed:
+   `trial_id()` folds `sha256(harness:model)[:8]` into a probe's id, real trials (index >= 0) unchanged;
+   test added (`test_probe_trial_ids_are_unique_per_cell_not_just_per_index`).
+2. **The oracle runner's default shell was the Windows one regardless of target kind.** `OracleRunner`'s
+   `shell` fell back to `"git-bash"` unconditionally; on the Linux target every oracle call tried to start a
+   shell that does not exist in the trial container, surfacing as attribution `indeterminate` (a crashed
+   probe, not a judge verdict) for tasks with no database dependency and judge failures for the ones that
+   do. Fixed: the default is `"bash"` when `kind == "docker"`, `"git-bash"` otherwise; a job can still
+   override it explicitly.
+3. **`auxiliary_models` was wired backwards for OpenCode.** `OpenCodeAdapter`'s title agent (`small_model`,
+   design E4) uses the *same* model id as the main request, so the first version of this wiring declared
+   that model as its own `auxiliary_models` entry to keep the title-agent call off the main request cap --
+   but `is_auxiliary` checks `body["model"] in auxiliary_models` *before* its own `saw_tools and not
+   body.get("tools")` fallback (the mechanism that already exists specifically to tell a same-model
+   tool-less title-agent request apart from the main one), so every request for that model was classified
+   auxiliary, not just the tool-less one: every OpenCode trial's `main_model_turns`/`main_model_tokens`
+   came back 0 regardless of what actually happened. Confirmed live: `redis-session-count` on OpenCode
+   showed `turns: 0, tokens: 0` with `auxiliary_models` wired, and real values (`turns: 1, main_model_tokens:
+   952` on the still-failing case) once it was removed. Fixed: dropped the `auxiliary_models` wiring for
+   OpenCode entirely; the `saw_tools` fallback already does the job unaided.
+
+**`screening-linux.toml`** (task 14.1): both harnesses, the three guardrail-pinned models, the `default`
+arm plus each harness's own native arm (`arm_support`), 3 trials, a representative 7-task slice of the
+27-task Linux suite (not the full suite -- a screening job is a cheap sanity check, not a decision job) that
+still includes all three `interop-*` tasks for parity and one database task. 198/198 trials ran; the report
+is labelled exploratory, contains no provider key, and no trial or database object was left behind
+(`docker ps -a` after the run shows only the two long-lived database containers; `db.gc()` at job start and
+end found nothing to remove).
+
+Qwen Code's `interop-*` results (100% across all three models, every trial) are directly comparable with
+S5's own finding that envelope's mechanics work correctly there. OpenCode's `interop-*` results are new data
+S5 never covered (S5 predates the OpenCode adapter entirely) -- and they are a real, consistent 0/9: every
+OpenCode trial of all three `interop-*` tasks, across all three models, failed, while OpenCode passed the
+*other* default-arm tasks (`canary`, `redis-session-count`) at normal rates. The `interop-*` instructions
+are envelope-mechanics tasks and so are explicitly allowed to name the tool: `` Use the envelope `run` tool
+(do not use any other tool) `` -- naming it as bare `run`, which is what Qwen Code's deferred-tool wrapper
+resolves to, but not the literal name OpenCode exposes it under (`mcp__envelope__run`, the same prefixed
+form its own tool-set check already uses). The judge reasons split between "answer not obtained by running
+the command" (never called it) and "reply does not contain the command's output" (answered without it):
+consistent with the model failing to resolve the bare name to the tool it more usually finds by its full,
+prefixed one, not with a wiring problem -- `redis-session-count`'s goal-stated instruction, which never
+names a tool by any name, sees no such gap for OpenCode. Left as a recorded finding, not fixed: fixing it
+would mean either rewording an envelope-mechanics task to fit one harness's naming convention or teaching
+the framework a harness-specific tool alias, both bigger than this task's scope.
+
+**`screening-windows.toml`** (task 14.2): Qwen Code only (the only harness installed on the VM), the same
+three models, the `default` arm plus a single native arm (`run_shell_command` resolves to `cmd.exe` on
+Windows, spike 1.3), 3 trials, a 10-task slice that includes both known-gap tasks; database tasks are left
+out (no `DatabaseAdmin` wired into the Windows target's build path -- the Linux screening job already
+covers that lane's database coverage, and adding it was not needed to satisfy this task). 126/126 trials
+ran within the wall-clock cap without needing the per-model split the task anticipated; the report is
+complete, contains no provider key, and both known gaps (`git-editor-default`, `gitbash-no-codepage-fallback`)
+appear under their ids with 9/9 passed each. `applocker-blocked-copy` (task 13.5) shows a wide, real spread
+by model (0% for `qwen/qwen3.8-flash` on the native arm up to 100% on the default arm for the same model) --
+plausible model-capability variance in copying-then-executing-then-reporting-an-exit-code correctly, not
+investigated further since it is exactly the kind of result a screening job exists to surface rather than
+explain.

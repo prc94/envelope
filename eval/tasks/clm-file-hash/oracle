@@ -1,0 +1,9 @@
+[
+    {
+        "tool": "run",
+        "arguments": {
+            "command": "(Get-FileHash -Algorithm SHA256 -Path payload.bin).Hash",
+            "shell": "powershell"
+        }
+    }
+]

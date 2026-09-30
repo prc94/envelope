@@ -1,0 +1,10 @@
+id = "mongo-customer-total"
+version = 1
+category = "database"
+lanes = ["linux"]
+shells = ["bash"]
+tags = ["database", "mongo"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 600

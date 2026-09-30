@@ -1,0 +1,9 @@
+[
+    {
+        "tool": "run",
+        "arguments": {
+            "command": "python confirm.py",
+            "stdin": "<<confirm_word>>\n"
+        }
+    }
+]
