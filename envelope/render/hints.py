@@ -37,6 +37,15 @@ class HintContext:
     ps_errors: int | None = None
     locate: Callable[[str], list[tuple[str, str]]] | None = None
     """command name -> [(other shell id, path)] where the command exists."""
+    command: str = ""
+    leftover_count: int | None = None
+    """Descendants still running (and terminated) when the shell exited on
+    its own; ``None`` while stopping/evicting/timing out, or on a platform
+    that cannot tell (design B11)."""
+    port_owner: str | None = None
+    """Resolved by the caller (it needs the process table/port lookup, which
+    this module stays free of); named only when the owner is one of
+    envelope's own tracked processes (design B11: "omitted when unknown")."""
 
 
 SIGNAL_NAMES = {
@@ -98,6 +107,33 @@ _PROMPT = re.compile(
     r"|proceed\?|are you sure\??|press any key[^.]*\.?|overwrite\?)\s*$",
     re.IGNORECASE,
 )
+# Background constructs (design B11): a lone `&` that isn't part of `&&`,
+# `2>&1`, `>&`, `&>` or `|&`, or `nohup`/`setsid`/`disown`. Every other `&`
+# construct is stripped first, so any `&` still left over is a backgrounding
+# operator, wherever in the command it falls.
+_BG_REDIRECT_AMP = re.compile(r"&&|\|&|\d*>&\d*|&>")
+_BG_LONE_AMP = re.compile(r"&")
+_BG_POSIX_CMD = re.compile(r"\b(nohup|setsid|disown)\b")
+_BG_CMD_START = re.compile(r"(?<![a-zA-Z])start\b", re.IGNORECASE)
+_BG_PS_CMDLET = re.compile(r"\bstart-(?:process|job)\b", re.IGNORECASE)
+_PORT_IN_USE = re.compile(
+    r"EADDRINUSE|address already in use|Only one usage of each socket address|\b10048\b",
+    re.IGNORECASE,
+)
+_PORT_NUMBER = re.compile(r":(\d{2,5})\b")
+
+
+def extract_port_in_use(lines: Sequence[str]) -> int | None:
+    """A port number from a line matching an address-in-use error, or
+    ``None`` if no such line (or no extractable port) is present."""
+    for line in reversed(lines):
+        if _PORT_IN_USE.search(line):
+            match = _PORT_NUMBER.search(line)
+            if match:
+                port = int(match.group(1))
+                if 1 <= port <= 65535:
+                    return port
+    return None
 
 
 def _missing_command(ctx: HintContext) -> str | None:
@@ -190,7 +226,8 @@ def timed_out(ctx: HintContext) -> Hint | None:
         else "some child processes could not be confirmed terminated"
     )
     more = (
-        f"; pass a larger timeout_s (up to {ctx.max_timeout_s:g}) if it needs longer"
+        f"; pass a larger timeout_s (up to {ctx.max_timeout_s:g}) if it needs longer, or omit "
+        "timeout_s and let it run in the background"
         if ctx.timeout_s < ctx.max_timeout_s
         else ""
     )
@@ -276,8 +313,42 @@ def stdin_prompt(ctx: HintContext) -> Hint | None:
     )
 
 
+def background_job_killed(ctx: HintContext) -> Hint | None:
+    if not ctx.leftover_count:
+        return None
+    if ctx.shell in BASH_FAMILY:
+        detected = bool(_BG_LONE_AMP.search(_BG_REDIRECT_AMP.sub(" ", ctx.command))) or bool(
+            _BG_POSIX_CMD.search(ctx.command)
+        )
+    elif ctx.shell == "cmd":
+        detected = bool(_BG_CMD_START.search(ctx.command))
+    elif ctx.shell in POWERSHELLS:
+        detected = bool(_BG_PS_CMDLET.search(ctx.command))
+    else:
+        detected = False
+    if not detected:
+        return None
+    plural = "es" if ctx.leftover_count != 1 else ""
+    return Hint(
+        "background_job_killed",
+        f"note: {ctx.leftover_count} background process{plural} started by this command were "
+        "still running when it finished and have been terminated; start it as its own run() "
+        "call instead (optionally with name and wait_for) to keep it alive",
+    )
+
+
+def port_in_use(ctx: HintContext) -> Hint | None:
+    port = extract_port_in_use(ctx.output_tail)
+    if port is None:
+        return None
+    owner = f" by {ctx.port_owner}" if ctx.port_owner is not None else ""
+    return Hint("port_in_use", f"note: port {port} is already in use{owner}")
+
+
 CATALOG: tuple[Callable[[HintContext], Hint | None], ...] = (
     timed_out,
+    background_job_killed,
+    port_in_use,
     not_found,
     not_executable,
     signaled,

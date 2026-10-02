@@ -34,6 +34,23 @@ def env_var_name(key: str) -> str:
     return ENV_PREFIX + key.upper()
 
 
+def _resolve_max_concurrency_alias(
+    values: dict[str, Any], source: str, warnings: list[str]
+) -> dict[str, Any]:
+    """`max_concurrency` is a deprecated alias of `max_running`, resolved per source."""
+    if "max_concurrency" not in values:
+        return values
+    alias_value = values.pop("max_concurrency")
+    if "max_running" in values:
+        raise ConfigError(
+            f"{source}: both max_concurrency and max_running are set; max_concurrency is a "
+            "deprecated alias of max_running, so only one may be given"
+        )
+    warnings.append(f"{source}: max_concurrency is deprecated; use max_running instead")
+    values["max_running"] = alias_value
+    return values
+
+
 def _read_toml(path: Path) -> dict[str, Any]:
     try:
         with path.open("rb") as handle:
@@ -70,7 +87,6 @@ def load(
     candidate = Path(explicit).expanduser() if explicit else paths.default_config_file()
     searched = [candidate]
     config_file: Path | None = None
-    values_seen: dict[str, Any] = {}
     if candidate.is_file():
         config_file = candidate
         raw = _flatten_policy(_read_toml(candidate))
@@ -81,8 +97,8 @@ def load(
                 warnings.append(f"{source}: unknown key '{key}' ignored")
                 continue
             values[key] = parse_value(key, value, text=False, source=source)
+        values = _resolve_max_concurrency_alias(values, source, warnings)
         settings = apply_layer(settings, values)
-        values_seen = values
     elif explicit:
         raise ConfigError(f"config file {candidate} does not exist")
 
@@ -96,17 +112,20 @@ def load(
             warnings.append(f"environment: unknown variable '{name}' ignored")
             continue
         env_values[key] = parse_value(key, value, text=True, source=f"environment {name}")
+    env_values = _resolve_max_concurrency_alias(env_values, "environment", warnings)
     settings = apply_layer(settings, env_values)
 
     flag_values = {
         key: parse_value(key, value, text=True, source="command line --" + key.replace("_", "-"))
         for key, value in flags.items()
     }
+    flag_values = _resolve_max_concurrency_alias(flag_values, "command line", warnings)
     settings = apply_layer(settings, flag_values)
 
-    explicit_default = "default_timeout_s" in {**values_seen, **env_values, **flag_values}
-    if not explicit_default and settings.default_timeout_s > settings.max_timeout_s:
-        # Lowering only the maximum also lowers the built-in default.
-        settings = apply_layer(settings, {"default_timeout_s": settings.max_timeout_s})
     check_consistency(settings, "configuration")
+    if settings.wait_max_s >= 600:
+        warnings.append(
+            f"wait_max_s = {settings.wait_max_s} is at or above 600s; Qwen Code's absolute "
+            "10-minute call limit leaves little margin"
+        )
     return LoadResult(settings, config_file, searched, warnings)

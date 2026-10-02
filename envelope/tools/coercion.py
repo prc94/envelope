@@ -14,7 +14,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-Kind = Literal["string", "number", "integer", "boolean", "env", "choice"]
+from envelope.execution.wait import WaitConditionError, parse_wait_for
+
+Kind = Literal["string", "number", "integer", "boolean", "env", "choice", "wait_for"]
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,11 @@ def coerce_value(param: Param, value: Any) -> tuple[Any, str | None]:
         if isinstance(value, int) and value in (0, 1):
             return bool(value), "number to boolean"
         raise _fail(param, value)
+    if kind == "wait_for":
+        try:
+            return parse_wait_for(value)
+        except WaitConditionError as exc:
+            raise ArgumentError(param.name, str(exc)) from None
     if kind == "choice":
         if isinstance(value, str):
             lowered = value.strip().lower()

@@ -55,6 +55,12 @@ def build_instructions(registry: Registry, *, machine: str | None = None) -> str
             '(out_...). Retrieve the rest with output(handle=..., grep="regex") or '
             "output(handle=..., offset=N, limit=M); output(handle=...) returns the tail.",
             "A non-zero exit code is a normal result, not a tool failure; read the output and notes.",
+            "A command still running after wait_s (default 30s) is handed back as a background "
+            "process: the result names its handle and keeps running. Continue with "
+            "output(handle=..., wait_for=...) to wait for a line/port/idle condition and read new "
+            "output, stop(handle=...) to end it, or processes() to list what's running. Name a "
+            "long-lived process (servers, watchers) with run(..., name=...): a later run() with the "
+            "same name joins it instead of starting a copy, and restart: true replaces it.",
         ]
     )
     text = "\n".join(lines)

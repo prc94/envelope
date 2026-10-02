@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from envelope.output.cleanup import Entry, clean_line, fold
 from envelope.output.render import Budget, Style, cleaned, human_bytes, line_cap, render_entry
-from envelope.output.spool import STDERR, STDOUT, SpoolReader
+from envelope.output.spool import STDERR, STDOUT, SpoolView
 
 StreamFilter = Literal["both", "stdout", "stderr"]
 DEFAULT_TAIL = 100
@@ -42,7 +42,7 @@ def _filtered(
             yield line_no, stream, text
 
 
-def _header(reader: SpoolReader, what: str, stream: StreamFilter) -> str:
+def _header(reader: SpoolView, what: str, stream: StreamFilter) -> str:
     meta = reader.meta
     parts = [
         reader.handle,
@@ -54,7 +54,7 @@ def _header(reader: SpoolReader, what: str, stream: StreamFilter) -> str:
     return " | ".join(parts)
 
 
-def _binary_note(reader: SpoolReader, streams: frozenset[int]) -> list[str]:
+def _binary_note(reader: SpoolView, streams: frozenset[int]) -> list[str]:
     notes: list[str] = []
     for sid, name in ((STDOUT, "stdout"), (STDERR, "stderr")):
         summary = reader.meta.streams[name]
@@ -66,12 +66,12 @@ def _binary_note(reader: SpoolReader, streams: frozenset[int]) -> list[str]:
     return notes
 
 
-def _style(reader: SpoolReader, stream: StreamFilter, max_chars: int) -> Style:
+def _style(reader: SpoolView, stream: StreamFilter, max_chars: int) -> Style:
     both = reader.meta.streams["stdout"].lines > 0 and reader.meta.streams["stderr"].lines > 0
     return Style(mark_stderr=both and stream == "both", numbered=True, max_line=line_cap(max_chars))
 
 
-def _base(reader: SpoolReader, mode: str, stream: StreamFilter) -> dict[str, Any]:
+def _base(reader: SpoolView, mode: str, stream: StreamFilter) -> dict[str, Any]:
     return {
         "handle": reader.handle,
         "mode": mode,
@@ -83,7 +83,7 @@ def _base(reader: SpoolReader, mode: str, stream: StreamFilter) -> dict[str, Any
 
 
 def tail_view(
-    reader: SpoolReader, n: int, stream: StreamFilter, max_chars: int, max_lines: int
+    reader: SpoolView, n: int, stream: StreamFilter, max_chars: int, max_lines: int
 ) -> View:
     streams = _streams(stream)
     style = _style(reader, stream, max_chars)
@@ -106,7 +106,7 @@ def tail_view(
 
 
 def range_view(
-    reader: SpoolReader,
+    reader: SpoolView,
     offset: int,
     limit: int,
     stream: StreamFilter,
@@ -132,7 +132,7 @@ def range_view(
 
 
 def _finish_range(
-    reader: SpoolReader,
+    reader: SpoolView,
     taken: list[tuple[Entry, str]],
     stream: StreamFilter,
     mode: str,
@@ -170,7 +170,7 @@ def _finish_range(
     if budget_hit and taken:
         last = taken[-1][0].last_line_no
         first = taken[0][0].line_no
-        if mode == "range":
+        if mode in ("range", "unread"):
             lines.append(
                 f'note: output budget reached; continue with output(handle="{reader.handle}", '
                 f"offset={last + 1}, limit={DEFAULT_LIMIT})"
@@ -183,8 +183,47 @@ def _finish_range(
     return View("\n".join(lines), structured)
 
 
+def unread_view(
+    reader: SpoolView, position: int, stream: StreamFilter, max_chars: int, max_lines: int
+) -> View:
+    """Lines after ``position`` (the last line previously shown to the model
+    in this mode), reporting a dropped range the position falls at or before
+    and never pointing a later omission marker into it. The head/tail
+    renderer's single-gap assumption does not hold for an arbitrary starting
+    position, so this handles the one possible gap itself, up front, before
+    the rest of the read is entirely retained and safe to render normally."""
+    start = position + 1
+    prefix_note: str | None = None
+    dropped = reader.dropped_range()
+    if dropped and start <= dropped[1]:
+        prefix_note = (
+            f"lines {dropped[0]:,}-{dropped[1]:,} were dropped (spool cap) and cannot be retrieved"
+        )
+        start = dropped[1] + 1
+    streams = _streams(stream)
+    style = _style(reader, stream, max_chars)
+    budget = Budget(max_chars, max_lines)
+    taken: list[tuple[Entry, str]] = []
+    budget_hit = False
+    for entry in fold(cleaned(_filtered(reader.lines(start, reader.total_lines), streams))):
+        text = render_entry(entry, style)
+        if not budget.fits(text):
+            budget_hit = True
+            break
+        budget.take(text)
+        taken.append((entry, text))
+    view = _finish_range(
+        reader, taken, stream, "unread", n_requested=0, budget_hit=budget_hit, offset=start
+    )
+    if prefix_note:
+        lines = view.text.split("\n")
+        lines.insert(1, f"[... {prefix_note} ...]")
+        view = View("\n".join(lines), view.structured)
+    return view
+
+
 def grep_view(
-    reader: SpoolReader,
+    reader: SpoolView,
     pattern: str,
     context: int,
     stream: StreamFilter,

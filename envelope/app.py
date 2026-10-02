@@ -16,7 +16,9 @@ from envelope.protocol.transport import ThreadedLineSource, stream_writer
 from envelope.services import Services, build_services
 from envelope.shells.registry import detect_host
 from envelope.tools.output import OutputTool
+from envelope.tools.processes import ProcessesTool
 from envelope.tools.run import RunTool
+from envelope.tools.stop import StopTool
 
 SERVER_INFO = {"name": "envelope", "title": "Envelope shell runner", "version": __version__}
 
@@ -37,13 +39,26 @@ def create_services(config: LoadResult, backend: Backend | None = None) -> Servi
     return services
 
 
+async def _shutdown(services: Services) -> None:
+    # Every in-flight tool call has already been cancelled and awaited by
+    # the time this runs (Server.serve), so anything still in the process
+    # table was not reported by its own call; sweep and audit it now.
+    await services.processes.shutdown("shutdown")
+    await asyncio.to_thread(services.backend.shutdown)
+
+
 def create_server(services: Services) -> Server:
     return Server(
-        tools=[RunTool(services), OutputTool(services)],
+        tools=[
+            RunTool(services),
+            OutputTool(services),
+            StopTool(services),
+            ProcessesTool(services),
+        ],
         server_info=SERVER_INFO,
         instructions=build_instructions(services.registry),
         progress_interval_s=services.settings.progress_interval_s,
-        on_shutdown=lambda: asyncio.to_thread(services.backend.shutdown),
+        on_shutdown=lambda: _shutdown(services),
     )
 
 

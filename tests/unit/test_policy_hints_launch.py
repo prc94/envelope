@@ -200,11 +200,11 @@ def test_gateway_records_decision_before_permit(tmp_path: Path) -> None:
 def test_run_cannot_execute_without_permit() -> None:
     import asyncio
 
-    from envelope.execution.runner import RunRequest, execute
+    from envelope.execution.runner import RunRequest, start
     from envelope.shells.launch import Launch
 
     async def attempt() -> None:
-        await execute(
+        await start(
             object(),  # type: ignore[arg-type]
             RunRequest("bash", Launch(["/bin/true"]), "/", {}, None, 0.0, 1.0),
             object(),  # type: ignore[arg-type]
@@ -320,6 +320,62 @@ def test_output_hints() -> None:
     assert ids(ctx(exit_code=0, replaced=3, encodings={"stdout": "utf-8"})) == ["replacement_chars"]
     assert ids(ctx(exit_code=1, last_partial="Continue? [y/N] ")) == ["stdin_prompt"]
     assert ids(ctx(exit_code=1, last_partial="Continue? [y/N] ", stdin_supplied=True)) == []
+
+
+def test_background_job_killed_bash() -> None:
+    assert ids(ctx(exit_code=0, command="sleep 30 &", leftover_count=1)) == [
+        "background_job_killed"
+    ]
+    assert ids(ctx(exit_code=0, command="nohup sleep 30", leftover_count=1)) == [
+        "background_job_killed"
+    ]
+
+
+def test_background_job_killed_cmd() -> None:
+    assert ids(ctx(shell_id="cmd", exit_code=0, command="start notepad", leftover_count=1)) == [
+        "background_job_killed"
+    ]
+
+
+def test_background_job_killed_powershell() -> None:
+    assert ids(
+        ctx(shell_id="pwsh", exit_code=0, command="Start-Process notepad", leftover_count=1)
+    ) == ["background_job_killed"]
+
+
+def test_background_job_killed_no_leftovers_no_hint() -> None:
+    assert ids(ctx(exit_code=0, command="sleep 30 &", leftover_count=None)) == []
+    assert ids(ctx(exit_code=0, command="sleep 30 &", leftover_count=0)) == []
+
+
+def test_background_job_killed_redirect_not_mistaken_for_ampersand() -> None:
+    # `gradle ... 2>&1` has no lone backgrounding `&`, even though leftovers exist
+    # for some other reason (e.g. a daemon the build itself spawned).
+    assert ids(ctx(exit_code=0, command="./gradlew build 2>&1", leftover_count=1)) == []
+    assert ids(ctx(exit_code=0, command="cmd1 && cmd2", leftover_count=1)) == []
+
+
+def test_port_in_use_with_owner() -> None:
+    hint = ids(
+        ctx(
+            exit_code=1,
+            tail=["Error: listen EADDRINUSE: address already in use :::3000"],
+            port_owner='out_1a2b3c4d ("web")',
+        )
+    )
+    assert hint == ["port_in_use"]
+
+
+def test_port_in_use_without_owner() -> None:
+    hints = hints_for(
+        ctx(exit_code=1, tail=["bind: address already in use :8080"], port_owner=None)
+    )
+    assert len(hints) == 1 and hints[0].id == "port_in_use"
+    assert "8080" in hints[0].text and " by " not in hints[0].text
+
+
+def test_no_port_in_use_hint_without_a_match() -> None:
+    assert ids(ctx(exit_code=1, tail=["some other error"])) == []
 
 
 def test_spawn_error_policy_codes() -> None:

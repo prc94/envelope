@@ -6,7 +6,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 
 from envelope.output.cleanup import Entry, clean_line, fold
-from envelope.output.spool import STDERR, SpoolReader
+from envelope.output.spool import STDERR, SpoolView
 
 STDERR_MARK = "[stderr] "
 HEAD_SHARE = 1 / 3
@@ -103,7 +103,7 @@ def _span(entries: list[tuple[Entry, str]]) -> tuple[int, int] | None:
     return entries[0][0].line_no, entries[-1][0].last_line_no
 
 
-def render_run_output(reader: SpoolReader, max_chars: int, max_lines: int) -> Rendered:
+def render_run_output(reader: SpoolView, max_chars: int, max_lines: int) -> Rendered:
     """Render cleaned, folded output within the budget, favoring the tail."""
     meta = reader.meta
     style = Style(
@@ -160,7 +160,7 @@ def render_run_output(reader: SpoolReader, max_chars: int, max_lines: int) -> Re
     )
 
 
-def omission_marker(reader: SpoolReader, first: int, last: int, omitted_bytes: int) -> str:
+def omission_marker(reader: SpoolView, first: int, last: int, omitted_bytes: int) -> str:
     handle = reader.handle
     count = last - first + 1
     text = (

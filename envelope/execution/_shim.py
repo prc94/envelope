@@ -13,7 +13,10 @@ can be killed, including after envelope itself dies:
 
 Status lines written to STATUS_FD: ``pid N``, ``error ERRNO MESSAGE``,
 ``exit CODE``, ``signal N`` (shell finished) and ``done`` (shim exiting).
-SIGTERM to the shim means "terminate the tree now".
+SIGTERM to the shim means "terminate the tree now". SIGUSR1 means "send
+SIGTERM to every descendant except the shim" (design B7: graceful `stop`) --
+on macOS the forked child gets its own process group, separate from the
+shim's, so a group-wide signal never reaches the shim itself.
 """
 
 import os
@@ -64,11 +67,15 @@ def _reap_nohang():
             return True
 
 
-def _kill_tree(linux):
-    """Kill every descendant. On macOS this also kills the shim itself."""
+def _kill_tree(linux, child):
+    """Forcibly kill every descendant of ``child`` (the shell). On macOS this
+    targets the shell's own process group (the shim isolated itself from it
+    at fork, so the shim is not a member and survives to exit normally)."""
     if not linux:
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        os.killpg(0, signal.SIGKILL)
+        try:
+            os.killpg(child, signal.SIGKILL)
+        except OSError:
+            pass
         return
     import time
 
@@ -86,6 +93,27 @@ def _kill_tree(linux):
         time.sleep(0.002)
 
 
+def _graceful_kill(linux, child):
+    """SIGTERM every descendant except the shim (design B7): the shell
+    itself plus everything under it on Linux (PID-tree walk from the shim,
+    which already excludes the shim); the shell's whole process group on
+    macOS, which the shim deliberately is not a member of."""
+    if linux:
+        # `_descendants_linux(<shim pid>)` walks the shim's own children and
+        # down, which already starts at `child` (the shell) and excludes the
+        # shim itself.
+        for pid in _descendants_linux(os.getpid()):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+    else:
+        try:
+            os.killpg(child, signal.SIGTERM)
+        except OSError:
+            pass
+
+
 def main():
     status_fd = int(sys.argv[1])
     parent = int(sys.argv[2])
@@ -93,6 +121,7 @@ def main():
     linux = sys.platform.startswith("linux")
 
     terminating = []
+    pid_holder = []  # set once the shell is forked; read by on_usr1 below
 
     def on_term(signum, frame):
         # Raise only once: a second SIGTERM (it happens, e.g. parent death
@@ -101,12 +130,20 @@ def main():
             terminating.append(signum)
             raise _Terminate()
 
-    # SIGTERM stays blocked until the wait loop below can handle it: a
-    # termination request (or parent death) arriving earlier stays pending
-    # instead of raising outside the try block and skipping the tree kill.
-    term = {signal.SIGTERM}
+    def on_usr1(signum, frame):
+        # Graceful `stop` (design B7): unlike SIGTERM, this does not raise --
+        # the shim keeps waiting normally, only the tree below it is signalled.
+        if pid_holder:
+            _graceful_kill(linux, pid_holder[0])
+
+    # SIGTERM/SIGUSR1 stay blocked until the wait loop below can handle them:
+    # a request arriving earlier (there is no child to signal yet, or a
+    # termination is already in flight) stays pending instead of running the
+    # handler too early or interrupting the tree kill in progress.
+    term = {signal.SIGTERM, signal.SIGUSR1}
     signal.pthread_sigmask(signal.SIG_BLOCK, term)
     signal.signal(signal.SIGTERM, on_term)
+    signal.signal(signal.SIGUSR1, on_usr1)
     if linux:
         import ctypes
 
@@ -125,14 +162,20 @@ def main():
             os.close(err_r)
             os.close(status_fd)
             os.set_inheritable(err_w, False)
+            if not linux:
+                # Isolate the shell into its own process group so a
+                # group-wide graceful SIGTERM (design B7) never reaches the
+                # shim, which stays in its original (session) group.
+                os.setpgid(0, 0)
             # Undo Python's startup changes that would otherwise survive exec.
-            for number in (signal.SIGTERM, signal.SIGPIPE, signal.SIGXFSZ):
+            for number in (signal.SIGTERM, signal.SIGUSR1, signal.SIGPIPE, signal.SIGXFSZ):
                 signal.signal(number, signal.SIG_DFL)
             signal.pthread_sigmask(signal.SIG_UNBLOCK, term)  # the mask survives exec
             os.execv(argv[0], argv)
         except OSError as exc:
             os.write(err_w, ("%d %s" % (exc.errno or 0, exc.strerror or exc)).encode())
         os._exit(127)
+    pid_holder.append(pid)
     os.close(err_w)
     failure = b""
     while True:
@@ -189,8 +232,16 @@ def main():
     except _Terminate:
         if shell_status is None:
             _status(status_fd, "killed")
+        # Reported so envelope can tell a background-construct cleanup (the
+        # command text had its own `&`/`nohup`) from an ordinary exit with
+        # nothing left running (design B11); macOS has no equivalent walk, so
+        # it stays silent rather than guessing.
+        if linux:
+            count = len(_descendants_linux(os.getpid()))
+            if count:
+                _status(status_fd, "leftover %d" % count)
         _status(status_fd, "done")
-        _kill_tree(linux)
+        _kill_tree(linux, pid)
         os._exit(0)
     _status(status_fd, "done")
     os._exit(0)

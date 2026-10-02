@@ -19,10 +19,23 @@ import subprocess
 import sys
 import threading
 import time
+from functools import cache
+from importlib import resources
 from typing import IO
 
 from envelope.execution.backend import ShellExit, SpawnError, spawn_error_from_os
 from envelope.log import logger
+
+DETACHED_PROCESS = 0x00000008
+CTRL_BREAK_HELPER_TIMEOUT_S = 3.0
+
+
+@cache
+def ctrlbreak_source() -> str:
+    return (
+        resources.files("envelope.execution").joinpath("_ctrlbreak.py").read_text(encoding="utf-8")
+    )
+
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -30,6 +43,12 @@ CREATE_NO_WINDOW = 0x08000000
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS = 1
+JOB_OBJECT_BASIC_PROCESS_ID_LIST_CLASS = 3
+_MAX_JOB_PIDS = 1024
+TCP_TABLE_OWNER_PID_LISTENER = 3
+AF_INET = 2
+AF_INET6 = 23
+ERROR_INSUFFICIENT_BUFFER = 122
 
 if sys.platform == "win32":
     import ctypes
@@ -85,6 +104,46 @@ if sys.platform == "win32":
             ("ActiveProcesses", wintypes.DWORD),
             ("TotalTerminatedProcesses", wintypes.DWORD),
         ]
+
+    class _ProcessIdList(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", wintypes.DWORD),
+            ("NumberOfProcessIdsInList", wintypes.DWORD),
+            ("ProcessIdList", ctypes.c_size_t * _MAX_JOB_PIDS),
+        ]
+
+    class _TcpRowOwnerPid(ctypes.Structure):
+        _fields_ = [
+            ("dwState", wintypes.DWORD),
+            ("dwLocalAddr", wintypes.DWORD),
+            ("dwLocalPort", wintypes.DWORD),
+            ("dwRemoteAddr", wintypes.DWORD),
+            ("dwRemotePort", wintypes.DWORD),
+            ("dwOwningPid", wintypes.DWORD),
+        ]
+
+    class _Tcp6RowOwnerPid(ctypes.Structure):
+        _fields_ = [
+            ("ucLocalAddr", ctypes.c_ubyte * 16),
+            ("dwLocalScopeId", wintypes.DWORD),
+            ("dwLocalPort", wintypes.DWORD),
+            ("ucRemoteAddr", ctypes.c_ubyte * 16),
+            ("dwRemoteScopeId", wintypes.DWORD),
+            ("dwRemotePort", wintypes.DWORD),
+            ("dwState", wintypes.DWORD),
+            ("dwOwningPid", wintypes.DWORD),
+        ]
+
+    _iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
+    _iphlpapi.GetExtendedTcpTable.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.DWORD),
+        wintypes.BOOL,
+        wintypes.ULONG,
+        ctypes.c_int,
+        wintypes.ULONG,
+    ]
+    _iphlpapi.GetExtendedTcpTable.restype = wintypes.DWORD
 
     _kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
     _kernel32.CreateJobObjectW.restype = wintypes.HANDLE
@@ -161,6 +220,51 @@ if sys.platform == "win32":
     def close_handle(handle: int) -> None:
         _kernel32.CloseHandle(handle)
 
+    def job_pids(job: int) -> frozenset[int] | None:
+        """Every PID in ``job`` (design B5/W3: filters the port table by the
+        run's job membership rather than a parent/child walk, since the
+        owning process can be a grandchild of the launched shell)."""
+        info = _ProcessIdList()
+        if not _kernel32.QueryInformationJobObject(
+            job,
+            JOB_OBJECT_BASIC_PROCESS_ID_LIST_CLASS,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+            None,
+        ):
+            return None
+        count = min(info.NumberOfProcessIdsInList, _MAX_JOB_PIDS)
+        return frozenset(int(info.ProcessIdList[i]) for i in range(count))
+
+    def _tcp_listener_ports(pids: frozenset[int], af: int) -> set[int]:
+        """LISTEN rows owned by ``pids`` (design B5/W3: `GetExtendedTcpTable`,
+        confirmed to work as an unprivileged standard user and to report the
+        job's own grandchild processes, not just the launched shell)."""
+        size = wintypes.DWORD(0)
+        row_type = _TcpRowOwnerPid if af == AF_INET else _Tcp6RowOwnerPid
+        result = _iphlpapi.GetExtendedTcpTable(
+            None, ctypes.byref(size), False, af, TCP_TABLE_OWNER_PID_LISTENER, 0
+        )
+        if result != ERROR_INSUFFICIENT_BUFFER:
+            return set()
+        buf = ctypes.create_string_buffer(size.value)
+        result = _iphlpapi.GetExtendedTcpTable(
+            buf, ctypes.byref(size), False, af, TCP_TABLE_OWNER_PID_LISTENER, 0
+        )
+        if result != 0:
+            return set()
+        num_entries = ctypes.cast(buf, ctypes.POINTER(wintypes.DWORD))[0]
+        rows = (row_type * num_entries).from_buffer(buf, ctypes.sizeof(wintypes.DWORD))
+        ports: set[int] = set()
+        for row in rows:
+            if row.dwOwningPid in pids:
+                # dwLocalPort holds the port in network byte order in its low word.
+                ports.add(((row.dwLocalPort & 0xFF) << 8) | ((row.dwLocalPort >> 8) & 0xFF))
+        return ports
+
+    def listening_ports_in_pids(pids: frozenset[int]) -> frozenset[int]:
+        return frozenset(_tcp_listener_ports(pids, AF_INET) | _tcp_listener_ports(pids, AF_INET6))
+
     def current_process() -> int:
         return int(_kernel32.GetCurrentProcess())
 
@@ -193,6 +297,34 @@ def ensure_self_job() -> bool:
         return False
     _self_job = job  # intentionally never closed: closing it would kill our children
     return True
+
+
+def send_ctrl_break(candidates: list[int]) -> bool:
+    """Design B7/spike E2: best-effort graceful-stop request via the
+    ctrl-break helper -- ``candidates[0]`` is the run's process-group id
+    (the actual CTRL_BREAK_EVENT target), the rest are other live job
+    members to attach through if it has already exited. Returns whether the
+    event was actually delivered (attached to a console and sent), not
+    whether the target honours it -- the caller still waits out its own
+    grace period and forces the kill if the tree does not exit."""
+    try:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                ctrlbreak_source(),
+                *map(str, candidates),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=DETACHED_PROCESS,
+        )
+        return proc.wait(CTRL_BREAK_HELPER_TIMEOUT_S) == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 class WindowsProcess:
@@ -241,6 +373,25 @@ class WindowsProcess:
                 if not self._closed:
                     self._closed = True
                     close_handle(self._job)  # kill-on-close reaps leftovers
+
+    def tree_pids(self) -> frozenset[int] | None:
+        if sys.platform != "win32":
+            return None
+        with self._lock:
+            if self._closed:
+                return frozenset()
+            return job_pids(self._job)
+
+    def request_graceful_stop(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        with self._lock:
+            if self._closed:
+                return False
+            root = self._popen.pid
+            members = job_pids(self._job)
+        candidates = [root, *[p for p in (members or ()) if p != root]]
+        return send_ctrl_break(candidates)
 
 
 class WindowsBackend:

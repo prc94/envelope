@@ -3,32 +3,48 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from envelope.audit import call_record
-from envelope.output.spool import HandleError
+from envelope.execution.wait import WaitCondition
+from envelope.output.spool import HandleError, SpoolView
 from envelope.output.view import (
     DEFAULT_LIMIT,
     DEFAULT_TAIL,
+    StreamFilter,
     View,
     ViewError,
     grep_view,
     range_view,
     tail_view,
+    unread_view,
 )
 from envelope.protocol.server import CallContext, ToolResult
 from envelope.services import Services
 from envelope.tools.coercion import ArgumentError, Param, coerce
 
 PARAMS = (
-    Param("handle", "string", "must be an output handle like out_1a2b3c4d (a string)"),
+    Param("handle", "string", "must be an output handle like out_1a2b3c4d, or a name (a string)"),
     Param("tail", "integer", "must be a whole number of lines"),
     Param("offset", "integer", "must be a 1-based line number"),
     Param("limit", "integer", "must be a whole number of lines"),
     Param("grep", "string", "must be a regular expression (a string)"),
     Param("context", "integer", "must be a whole number of context lines"),
     Param("stream", "choice", "must be one of both, stdout, stderr", ("both", "stdout", "stderr")),
+    Param("wait_s", "number", "must be 0 or a positive number of seconds"),
+    Param(
+        "wait_for",
+        "wait_for",
+        "must be 'exit', 'regex:<pattern>', 'port:<n>', 'idle:<seconds>' or an object form",
+    ),
 )
+_EXIT_CONDITION = WaitCondition("exit", "exit")
+_WAIT_OUTCOME_NOTES = {
+    "condition_met": "note: wait condition met",
+    "finished": "note: the process finished before the wait condition was met",
+    "wait_expired": "note: the wait expired before the condition was met",
+}
 
 
 def output_definition() -> dict[str, Any]:
@@ -37,11 +53,13 @@ def output_definition() -> dict[str, Any]:
         "title": "Read command output",
         "description": (
             "Read the full, saved output of an earlier `run` shell command by its handle (out_...), "
-            "for example when the terminal output shown in the run result was truncated. Choose ONE "
-            f"mode: tail (last N lines, the default with {DEFAULT_TAIL} lines), offset+limit (1-based "
-            f"line range, limit defaults to {DEFAULT_LIMIT}), or grep (Python regular expression) with "
-            "optional context lines. stream selects stdout, stderr or both (default). Lines are "
-            "returned with their line numbers."
+            "for example when the terminal output shown in the run result was truncated. With no "
+            "tail/offset/grep argument, returns lines not yet shown by a previous `output` call on "
+            f"this handle (or the last {DEFAULT_TAIL} lines if none were shown yet). Otherwise choose "
+            f"ONE explicit mode: tail (last N lines), offset+limit (1-based line range, limit "
+            f"defaults to {DEFAULT_LIMIT}), or grep (Python regular expression) with optional context "
+            "lines. stream selects stdout, stderr or both (default). Lines are returned with their "
+            "line numbers."
         ),
         "inputSchema": {
             "type": "object",
@@ -68,6 +86,17 @@ def output_definition() -> dict[str, Any]:
                     "type": "string",
                     "enum": ["both", "stdout", "stderr"],
                     "description": "Which stream to read (default both).",
+                },
+                "wait_s": {
+                    "type": "number",
+                    "description": "Wait this long for wait_for (or the process exiting) before reading.",
+                },
+                "wait_for": {
+                    "type": ["string", "object"],
+                    "description": (
+                        "Condition to wait for before reading: 'exit' (default), "
+                        "'regex:<pattern>', 'port:<n>' or 'idle:<seconds>'."
+                    ),
                 },
             },
             "required": ["handle"],
@@ -97,17 +126,77 @@ class OutputTool:
         try:
             values, more = coerce(arguments, PARAMS)
             coercions.extend(more)
-            view = await asyncio.to_thread(self._view, values)
+            handle = values.get("handle")
+            if not isinstance(handle, str) or not handle.strip():
+                raise ValueError(
+                    "`handle` is required (the out_... handle or name from a run result)"
+                )
+            resolved = self.services.processes.resolve_handle(handle.strip()) or handle.strip()
+            wait_outcome = await self._maybe_wait(resolved, values)
+            view = await asyncio.to_thread(self._view, {**values, "handle": resolved})
         except (ArgumentError, HandleError, ViewError, ValueError) as exc:
             self._audit(ctx, arguments, coercions, {"error": str(exc)})
-            return ToolResult(f"error: {exc}", {"error": str(exc)}, is_error=True)
+            return self.services.attach_notice(
+                ToolResult(f"error: {exc}", {"error": str(exc)}, is_error=True)
+            )
+        structured = dict(view.structured)
+        self._add_process_state(structured, resolved)
+        text = view.text
+        if wait_outcome is not None:
+            structured["wait_outcome"] = wait_outcome
+            text = f"{text}\n{_WAIT_OUTCOME_NOTES[wait_outcome]}"
         self._audit(
             ctx,
             values,
             coercions,
-            {k: view.structured.get(k) for k in ("handle", "mode", "truncated")},
+            {k: structured.get(k) for k in ("handle", "mode", "truncated")},
         )
-        return ToolResult(view.text, view.structured)
+        return self.services.attach_notice(ToolResult(text, structured))
+
+    async def _maybe_wait(self, resolved: str, values: dict[str, Any]) -> str | None:
+        wait_for_value = values.get("wait_for")
+        wait_s_value = values.get("wait_s")
+        if wait_for_value is None and wait_s_value is None:
+            return None
+        managed = self.services.processes.get(resolved)
+        if managed is None or managed.finished:
+            return None
+        settings = self.services.settings
+        condition: WaitCondition = wait_for_value if wait_for_value is not None else _EXIT_CONDITION
+        wait_s = float(wait_s_value) if wait_s_value is not None else settings.wait_default_s
+        wait_s = max(0.0, min(wait_s, settings.wait_max_s))
+        position = self.services.spool.read_position(resolved)
+        return await managed.wait_condition(
+            condition, time.monotonic() + wait_s, from_line=position
+        )
+
+    def _add_process_state(self, structured: dict[str, Any], resolved: str) -> None:
+        managed = self.services.processes.get(resolved)
+        if managed is not None:
+            if managed.finished:
+                assert managed.outcome is not None
+                structured["state"] = "ended"
+                structured["exit_code"] = managed.outcome.exit_code
+                structured["signal"] = managed.outcome.signal
+            else:
+                structured["state"] = "running"
+            if managed.name is not None:
+                structured["name"] = managed.name
+            return
+        # Not (or no longer) in the live table: the process already finished
+        # and was reported, but its final status survives in the spool's own
+        # meta.json (`Services.finalize_process`), bounded by normal spool
+        # retention rather than an unbounded in-memory cache.
+        try:
+            info = self.services.spool.open(resolved).meta.info
+        except HandleError:
+            return
+        if "exit_code" in info:
+            structured["state"] = "ended"
+            structured["exit_code"] = info["exit_code"]
+            structured["signal"] = info["signal"]
+            if "name" in info:
+                structured["name"] = info["name"]
 
     def _audit(
         self,
@@ -125,6 +214,7 @@ class OutputTool:
                 request=None,
                 decision=None,
                 outcome=outcome,
+                executes=False,
             )
         )
 
@@ -149,7 +239,11 @@ class OutputTool:
                 f"use exactly one read mode, not {' and '.join(modes)} (tail, offset/limit or grep)"
             )
         budget = (settings.output_max_chars, settings.output_max_lines)
-        mode = modes[0] if modes else "tail"
+        if not modes:
+            # No explicit mode: "unread else tail" (design B4). Explicit modes
+            # below never move the read position -- only this default does.
+            return self._unread_or_tail(reader, handle.strip(), stream, budget)
+        mode = modes[0]
         if mode == "grep":
             pattern = values["grep"]
             if not pattern:
@@ -167,3 +261,15 @@ class OutputTool:
         if tail < 1:
             raise ValueError("`tail` must be 1 or greater")
         return tail_view(reader, tail, stream, *budget)
+
+    def _unread_or_tail(
+        self, reader: SpoolView, handle: str, stream: StreamFilter, budget: tuple[int, int]
+    ) -> View:
+        position = self.services.spool.read_position(handle)
+        if position >= reader.total_lines:
+            return tail_view(reader, DEFAULT_TAIL, stream, *budget)
+        view = unread_view(reader, position, stream, *budget)
+        last_line = view.structured.get("last_line")
+        if last_line is not None:
+            self.services.spool.advance_read_position(handle, last_line)
+        return view

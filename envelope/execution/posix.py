@@ -48,6 +48,8 @@ class PosixProcess:
         self._error: SpawnError | None = None
         self.shell_pid: int | None = None
         self._killed = False
+        self.leftover_count: int | None = None
+        self._done_event = threading.Event()
         threading.Thread(target=self._read_status, name="envelope-status", daemon=True).start()
 
     def _read_status(self) -> None:
@@ -87,7 +89,11 @@ class PosixProcess:
         elif kind == "signal":
             self._exit = ShellExit(None, int(rest))
             self._exit_event.set()
+        elif kind == "leftover":
+            self.leftover_count = int(rest) if rest.isdigit() else None
         elif kind in ("killed", "done"):
+            if kind == "done":
+                self._done_event.set()
             self._exit_event.set()
 
     def wait_started(self) -> SpawnError | None:
@@ -110,10 +116,30 @@ class PosixProcess:
         except OSError:
             pass
 
+    def request_graceful_stop(self) -> bool:
+        """SIGUSR1 to the shim (design B7): "SIGTERM every descendant except
+        the shim". Returns whether the signal was actually sent."""
+        with self._lock:
+            if self._killed:
+                return False
+        if self._popen.poll() is not None:
+            return False
+        try:
+            self._popen.send_signal(signal.SIGUSR1)
+            return True
+        except OSError:
+            return False
+
     def wait_terminated(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
         try:
             self._popen.wait(max(deadline - time.monotonic(), 0.01))
+            # The shim writes its final status lines (including `leftover N`)
+            # to the status pipe just before exiting; the OS process wait
+            # above only confirms the exit, not that the status-reading
+            # thread has drained them yet, so give it a brief, bounded chance
+            # to catch up before the caller reads `leftover_count`.
+            self._done_event.wait(1.0)
             return True
         except subprocess.TimeoutExpired:
             pass
@@ -138,6 +164,38 @@ class PosixProcess:
         if self._popen.poll() is None:
             self.terminate_tree()
             self.wait_terminated(KILL_GRACE_S)
+
+    def tree_pids(self) -> frozenset[int] | None:
+        """Every live PID of this command's tree (shim plus descendants),
+        for `port:` waits (design B5). Linux only: macOS has no cheap way to
+        enumerate `/proc`-style descendants (documented limitation)."""
+        if not sys.platform.startswith("linux"):
+            return None
+        if self._popen.poll() is not None:
+            return frozenset()
+        children: dict[int, list[int]] = {}
+        try:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{entry}/stat", "rb") as handle:
+                        stat = handle.read()
+                except OSError:
+                    continue
+                # Field 4 (ppid) follows the parenthesized command name,
+                # which may itself contain spaces.
+                fields = stat[stat.rfind(b")") + 2 :].split()
+                children.setdefault(int(fields[1]), []).append(int(entry))
+        except OSError:
+            return None
+        found = [self._popen.pid]
+        stack = [self._popen.pid]
+        while stack:
+            for child in children.get(stack.pop(), ()):
+                found.append(child)
+                stack.append(child)
+        return frozenset(found)
 
 
 class PosixBackend:

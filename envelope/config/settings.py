@@ -46,9 +46,21 @@ class Settings:
     default_shell: str | None = None
     shells: Mapping[str, CustomShell] = field(default_factory=lambda: dict[str, CustomShell]())
     default_cwd: str | None = None
-    default_timeout_s: float = 120.0
+    default_timeout_s: float | None = None
+    """Unset by default (design B9): a handed-back process runs until it
+    exits, is stopped, is evicted, or envelope exits. Set this to restore
+    P1-like behaviour (a hard kill deadline for every command)."""
     max_timeout_s: float = 3600.0
     max_concurrency: int = 8
+    wait_default_s: float = 30.0
+    wait_max_s: float = 300.0
+    max_running: int = 16
+    evict_policy: str = "lru-unnamed"
+    max_lifetime_s: float | None = None
+    stop_grace_s: float = 5.0
+    stop_grace_max_s: float = 60.0
+    input_hint_after_s: float = 10.0
+    processes_limit: int = 20
     progress_interval_s: float = 5.0
     env_defaults: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_ENV))
     env_scrub: tuple[str, ...] = DEFAULT_SCRUB
@@ -106,6 +118,30 @@ def _number(positive: bool, integer: bool) -> Parser:
         return value if integer else float(value)
 
     return parse
+
+
+def _opt_number(positive: bool, integer: bool) -> Parser:
+    kind = "integer" if integer else "number"
+    expected = f"must be a positive {kind} or empty/unset for none"
+    number = _number(positive, integer)
+
+    def parse(key: str, value: Any, text: bool) -> Any:
+        if value is None:
+            return None
+        if text and isinstance(value, str) and not value.strip():
+            return None
+        try:
+            return number(key, value, text)
+        except ValueError:
+            raise ValueError(expected) from None
+
+    return parse
+
+
+def _evict_policy(key: str, value: Any, text: bool) -> str:
+    if isinstance(value, str) and value.strip() in ("lru-unnamed", "refuse"):
+        return value.strip()
+    raise ValueError("must be 'lru-unnamed' or 'refuse'")
 
 
 def _bool(key: str, value: Any, text: bool) -> bool:
@@ -248,9 +284,18 @@ PARSERS: dict[str, Parser] = {
     "default_shell": _shell_id,
     "shells": _shells,
     "default_cwd": _opt_str,
-    "default_timeout_s": _number(True, False),
+    "default_timeout_s": _opt_number(True, False),
     "max_timeout_s": _number(True, False),
     "max_concurrency": _number(True, True),
+    "wait_default_s": _number(True, False),
+    "wait_max_s": _number(True, False),
+    "max_running": _number(True, True),
+    "evict_policy": _evict_policy,
+    "max_lifetime_s": _opt_number(True, False),
+    "stop_grace_s": _number(True, False),
+    "stop_grace_max_s": _number(True, False),
+    "input_hint_after_s": _number(True, False),
+    "processes_limit": _number(True, True),
     "progress_interval_s": _number(True, False),
     "env_defaults": _str_map,
     "env_scrub": _patterns,
@@ -289,10 +334,23 @@ def apply_layer(base: Settings, values: Mapping[str, Any]) -> Settings:
 
 def check_consistency(settings: Settings, source: str) -> None:
     """Cross-field checks and shell identifiers (after all layers are merged)."""
-    if settings.default_timeout_s > settings.max_timeout_s:
+    if (
+        settings.default_timeout_s is not None
+        and settings.default_timeout_s > settings.max_timeout_s
+    ):
         raise ConfigError(
             f"{source}: default_timeout_s = {settings.default_timeout_s}: default_timeout_s "
             f"must not exceed max_timeout_s ({settings.max_timeout_s})"
+        )
+    if settings.wait_default_s > settings.wait_max_s:
+        raise ConfigError(
+            f"{source}: wait_default_s = {settings.wait_default_s}: wait_default_s "
+            f"must not exceed wait_max_s ({settings.wait_max_s})"
+        )
+    if settings.stop_grace_s > settings.stop_grace_max_s:
+        raise ConfigError(
+            f"{source}: stop_grace_s = {settings.stop_grace_s}: stop_grace_s "
+            f"must not exceed stop_grace_max_s ({settings.stop_grace_max_s})"
         )
     known = set(BUILTIN_SHELLS) | set(settings.shells)
     if settings.default_shell is not None and settings.default_shell not in known:

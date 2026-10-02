@@ -58,16 +58,19 @@ class StreamDecoder:
         self.replaced = 0
         self.raw_bytes = 0
         self._pending = b""
+        self._pending_since: float | None = None
         self._decoder: codecs.IncrementalDecoder | None = None
         self._switched = False
 
     # --- public API ------------------------------------------------------------
 
-    def feed(self, data: bytes) -> str:
+    def feed(self, data: bytes, *, now: float | None = None) -> str:
         self.raw_bytes += len(data)
         if self.binary:
             return ""
         if self._decoder is None:
+            if not self._pending and now is not None:
+                self._pending_since = now
             self._pending += data
             if not self._ready(self._pending):
                 return ""
@@ -75,6 +78,28 @@ class StreamDecoder:
             self._decide(data)
             if self.binary:
                 return ""
+        return self._decode(data, final=False)
+
+    def peek_pending(self) -> str:
+        """Best-effort text of undecided bytes still buffered, for display only
+        (does not commit to an encoding decision). Empty once decided."""
+        if self._decoder is not None or not self._pending:
+            return ""
+        return self._pending.decode("utf-8", "replace")
+
+    def maybe_decide_idle(self, now: float, idle_s: float = 0.2) -> str:
+        """Force the pending encoding decision if bytes have sat unread for
+        ``idle_s`` without reaching a newline or :data:`SNIFF_BYTES` (design B4:
+        decide on the first newline, 1,024 bytes, or 200 ms without new bytes,
+        whichever comes first). Returns any newly-decoded text."""
+        if self._decoder is not None or not self._pending or self._pending_since is None:
+            return ""
+        if now - self._pending_since < idle_s:
+            return ""
+        data, self._pending = self._pending, b""
+        self._decide(data)
+        if self.binary:
+            return ""
         return self._decode(data, final=False)
 
     def finish(self) -> str:

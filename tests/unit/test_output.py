@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 
@@ -10,8 +14,16 @@ import pytest
 from envelope.output.cleanup import clean_line, fold
 from envelope.output.decode import StreamDecoder
 from envelope.output.render import render_run_output
-from envelope.output.spool import STDERR, STDOUT, HandleError, SpoolManager, SpoolReader
-from envelope.output.view import ViewError, grep_view, range_view, tail_view
+from envelope.output.spool import (
+    STDERR,
+    STDOUT,
+    HandleError,
+    LiveSpoolReader,
+    SpoolManager,
+    SpoolReader,
+    SpoolView,
+)
+from envelope.output.view import ViewError, grep_view, range_view, tail_view, unread_view
 
 MIB = 1024 * 1024
 PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + bytes(range(256)) * 8
@@ -27,7 +39,7 @@ def spool(
     *,
     cap: int = 64 * MIB,
     codepage: str | None = None,
-) -> SpoolReader:
+) -> SpoolView:
     mgr = manager(tmp_path, cap)
     writer = mgr.create({"command": "test"}, fallback_codepage=codepage)
     for stream, data in chunks:
@@ -37,7 +49,7 @@ def spool(
     return mgr.open(writer.meta.handle)
 
 
-def text_of(reader: SpoolReader) -> list[tuple[int, str]]:
+def text_of(reader: SpoolView) -> list[tuple[int, str]]:
     return [(stream, text) for _, stream, text in reader.lines()]
 
 
@@ -82,6 +94,17 @@ def test_invalid_utf8_is_replaced_and_counted() -> None:
 def test_binary_png_detected() -> None:
     text, decoder = decode_all(PNG, chunk=100)
     assert text == "" and decoder.binary and decoder.binary_type == "PNG"
+
+
+def test_decoder_decides_on_200ms_idle_without_newline_or_1024_bytes() -> None:
+    decoder = StreamDecoder()
+    assert decoder.feed(b"Password: ", now=0.0) == ""
+    assert decoder.encoding is None  # too short, no newline: not decided yet
+    assert decoder.maybe_decide_idle(0.1) == ""  # under the 200ms threshold
+    assert decoder.encoding is None
+    text = decoder.maybe_decide_idle(0.2)  # exactly at the threshold
+    assert text == "Password: " and decoder.encoding == "utf-8"
+    assert decoder.maybe_decide_idle(1.0) == ""  # already decided: a no-op
 
 
 # --- real Windows samples (spike S6, captured 2026-09-25 from a real Windows 10 19044 VM;
@@ -194,6 +217,146 @@ def test_index_lookup_matches_full_read(tmp_path: Path) -> None:
     assert list(reader.lines_reversed(4000, 3990)) == list(reversed(full[3989:4000]))
 
 
+def test_live_reader_reads_head_tail_range_and_grep_while_writer_appends(
+    tmp_path: Path,
+) -> None:
+    mgr = manager(tmp_path)
+    writer = mgr.create({"command": "live"}, fallback_codepage=None)
+    handle = writer.meta.handle
+    total = 2000
+
+    stop_writing = threading.Event()
+    errors: list[BaseException] = []
+
+    def write_loop() -> None:
+        try:
+            for i in range(total):
+                writer.add(STDOUT, f"line {i}\n".encode())
+        finally:
+            stop_writing.set()
+
+    def read_loop() -> None:
+        try:
+            while not stop_writing.is_set():
+                reader = mgr.open(handle)
+                assert isinstance(reader, LiveSpoolReader)
+                list(reader.lines(1, 5))  # head
+                list(reader.lines_reversed())  # tail
+                list(reader.lines(100, 120))  # a range
+                view = grep_view(reader, "line 4", 0, "both", 12_000, 400)
+                assert "matching line" in view.text  # "1 matching line" or "N matching lines"
+        except BaseException as exc:
+            errors.append(exc)
+
+    writer_thread = threading.Thread(target=write_loop)
+    reader_thread = threading.Thread(target=read_loop)
+    reader_thread.start()
+    writer_thread.start()
+    writer_thread.join(timeout=30)
+    reader_thread.join(timeout=30)
+    assert not writer_thread.is_alive() and not reader_thread.is_alive()
+    assert not errors
+
+    writer.finish()
+    mgr.release(writer)
+    final = mgr.open(handle)
+    assert isinstance(final, SpoolReader)
+    assert final.total_lines == total
+
+
+def test_live_reader_pin_defers_unlink_while_writer_rolls_many_segments(tmp_path: Path) -> None:
+    mgr = manager(tmp_path, cap=800)  # tiny cap: a handful of writes roll several tail segments
+    writer = mgr.create({"command": "live"}, fallback_codepage=None)
+    handle = writer.meta.handle
+    line = b"x" * 50 + b"\n"
+    for _ in range(20):
+        writer.add(STDOUT, line)
+        if any(s.number == 1 for s in writer.meta.segments):
+            break
+    else:
+        pytest.fail("expected segment 1 to exist by now")
+
+    reader = mgr.open(handle)
+    assert isinstance(reader, LiveSpoolReader)
+    gen = reader.lines_reversed()
+    next(gen)  # starts the generator body, pinning the segments in its snapshot (incl. 1)
+
+    seg1_files = [writer.dir / f"{kind}-1.bin" for kind in ("frames", "lines", "index")]
+    assert all(p.exists() for p in seg1_files)
+
+    stop = threading.Event()
+
+    def roll_more() -> None:
+        try:
+            for _ in range(400):
+                writer.add(STDOUT, line)
+        finally:
+            stop.set()
+
+    writer_thread = threading.Thread(target=roll_more)
+    writer_thread.start()
+    writer_thread.join(timeout=30)
+    assert stop.is_set()
+
+    # segment 1 has been rolled past TAIL_SEGMENTS and logically dropped...
+    assert not any(s.number == 1 for s in writer.snapshot.segments)
+    # ...but its files must still exist: the still-open generator pins it
+    assert all(p.exists() for p in seg1_files)
+
+    list(gen)  # drain the generator -> unpins
+
+    # now that nothing pins it, the deferred unlink has happened
+    assert not any(p.exists() for p in seg1_files)
+
+
+def test_live_reader_degrades_to_dropped_when_a_segment_file_is_missing_under_it(
+    tmp_path: Path,
+) -> None:
+    mgr = manager(tmp_path)
+    writer = mgr.create({"command": "live"}, fallback_codepage=None)
+    handle = writer.meta.handle
+    writer.add(STDOUT, b"a\n")
+    writer.add(STDOUT, b"b\n")
+    reader = mgr.open(handle)
+    assert isinstance(reader, LiveSpoolReader)
+
+    # simulate a foreign deletion race that pinning alone cannot close (e.g. a
+    # segment vanishing between taking the snapshot and pinning it)
+    for kind in ("frames", "lines", "index"):
+        (writer.dir / f"{kind}-0.bin").unlink()
+
+    assert list(reader.lines()) == []
+    assert list(reader.raw_frames()) == []
+
+
+def test_snapshot_exposes_a_prompt_without_a_newline(tmp_path: Path) -> None:
+    writer = manager(tmp_path).create({"command": "live"}, fallback_codepage=None)
+    writer.add(STDOUT, b"Password: ")
+    assert writer.snapshot.unterminated[STDOUT] == "Password: "
+    assert writer.meta.total_lines == 0  # not a complete line yet
+
+
+def test_snapshot_resolves_carriage_return_progress_line(tmp_path: Path) -> None:
+    writer = manager(tmp_path).create({"command": "live"}, fallback_codepage=None)
+    writer.add(STDOUT, b"0%\r50%\r100%")
+    assert writer.snapshot.unterminated[STDOUT] == "100%"
+    assert writer.meta.total_lines == 0
+
+
+def test_unterminated_line_becomes_a_complete_line_once_its_newline_arrives(
+    tmp_path: Path,
+) -> None:
+    writer = manager(tmp_path).create({"command": "live"}, fallback_codepage=None)
+    writer.add(STDOUT, b"building")
+    assert writer.snapshot.unterminated[STDOUT] == "building"
+    assert writer.meta.total_lines == 0
+
+    writer.add(STDOUT, b"... done\n")
+    assert writer.snapshot.unterminated[STDOUT] == ""
+    assert writer.meta.total_lines == 1
+    assert next(SpoolReader(writer.dir, writer.meta).lines()) == (1, STDOUT, "building... done")
+
+
 def test_cap_keeps_head_and_tail(tmp_path: Path) -> None:
     cap = 1 * MIB
     line = b"%08d " + b"y" * 90 + b"\n"
@@ -252,6 +415,61 @@ def test_handles_eviction_and_retention(tmp_path: Path) -> None:
         mgr.open("../../etc")
 
 
+def test_touch_refreshes_the_spool_directory_mtime(tmp_path: Path) -> None:
+    writer = manager(tmp_path).create({}, fallback_codepage=None)
+    os.utime(writer.dir, (time.time() - 1000, time.time() - 1000))
+    before = writer.dir.stat().st_mtime
+    writer.touch()
+    assert writer.dir.stat().st_mtime > before
+
+
+def test_second_manager_cleanup_protects_a_live_owner(tmp_path: Path) -> None:
+    mgr1 = manager(tmp_path, total=300_000)
+    writer = mgr1.create({}, fallback_codepage=None)
+    writer.add(STDOUT, b"still running\n")  # never finished/released: stays live
+    assert (writer.dir / "owner.json").exists()
+    os.utime(writer.dir, (time.time() - 25 * 3600, time.time() - 25 * 3600))  # looks ancient
+
+    mgr2 = manager(tmp_path, total=300_000)  # a second instance, same directory
+    mgr2.cleanup()  # our own PID (the recorded owner) is genuinely still running
+
+    assert writer.dir.exists(), "a live owner must protect the spool across instances"
+
+
+def test_second_manager_cleanup_removes_a_stale_owner(tmp_path: Path) -> None:
+    mgr1 = manager(tmp_path, total=300_000)
+    writer = mgr1.create({}, fallback_codepage=None)
+    writer.add(STDOUT, b"orphaned\n")
+
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    (writer.dir / "owner.json").write_text(json.dumps({"pid": dead.pid, "start": None}))
+    os.utime(writer.dir, (time.time() - 25 * 3600, time.time() - 25 * 3600))
+
+    mgr2 = manager(tmp_path, total=300_000)
+    mgr2.cleanup()
+
+    assert not writer.dir.exists(), "a dead owner must not protect the spool"
+
+
+def test_enforce_total_counts_but_never_evicts_live_spools(tmp_path: Path) -> None:
+    mgr = manager(tmp_path, total=80_000)
+    live = [mgr.create({}, fallback_codepage=None) for _ in range(3)]
+    for w in live:
+        w.add(STDOUT, os.urandom(20_000).hex().encode())  # ~40 KB each: 120 KB > 80 KB cap
+
+    finished = mgr.create({}, fallback_codepage=None)
+    finished.add(STDOUT, os.urandom(5_000).hex().encode())
+    finished.finish()
+    mgr.release(finished)  # no longer live; the only evictable entry
+
+    mgr.enforce_total()
+
+    for w in live:
+        assert w.dir.exists(), "a live (still-writing) spool must never be evicted"
+    assert not finished.dir.exists(), "over cap, with only one evictable entry available"
+
+
 # --- truncation ---------------------------------------------------------------------------
 
 
@@ -286,7 +504,7 @@ def test_large_output_head_tail_marker(tmp_path: Path) -> None:
 # --- output tool views ----------------------------------------------------------------------
 
 
-def make_log(tmp_path: Path) -> SpoolReader:
+def make_log(tmp_path: Path) -> SpoolView:
     text = "".join(
         f"FAIL test_{i}\n" if i in (100, 500, 900) else f"PASS test_{i}\n" for i in range(1, 2001)
     )
@@ -334,3 +552,103 @@ def test_view_grep_budget_reports_more(tmp_path: Path) -> None:
 def test_view_invalid_regex(tmp_path: Path) -> None:
     with pytest.raises(ViewError, match="invalid regular expression"):
         grep_view(make_log(tmp_path), "([", 0, "both", 12_000, 400)
+
+
+# --- unread ("follow-along") reads and read positions ----------------------------------------
+
+
+def test_follow_along_reads_only_return_lines_not_shown_before(tmp_path: Path) -> None:
+    mgr = manager(tmp_path)
+    writer = mgr.create({}, fallback_codepage=None)
+    for i in range(1, 11):
+        writer.add(STDOUT, f"line {i}\n".encode())
+    writer.finish()
+    mgr.release(writer)
+    reader = mgr.open(writer.meta.handle)
+
+    first = unread_view(reader, mgr.read_position(writer.meta.handle), "both", 12_000, 400)
+    assert first.structured["mode"] == "unread"
+    assert first.text.splitlines()[1:] == [f"{i}: line {i}" for i in range(1, 11)]
+    mgr.advance_read_position(writer.meta.handle, first.structured["last_line"])
+
+    # the run already finished with nothing more written: a second follow-along
+    # read at the advanced position finds nothing new
+    second = unread_view(reader, mgr.read_position(writer.meta.handle), "both", 12_000, 400)
+    assert second.structured.get("first_line") is None
+    assert "no lines" in second.text.splitlines()[0]
+
+
+def test_follow_along_reads_advance_as_a_live_process_grows(tmp_path: Path) -> None:
+    mgr = manager(tmp_path)
+    writer = mgr.create({}, fallback_codepage=None)
+    handle = writer.meta.handle
+    for i in range(1, 6):
+        writer.add(STDOUT, f"line {i}\n".encode())
+    reader = mgr.open(handle)  # a LiveSpoolReader: the run is still going
+
+    first = unread_view(reader, mgr.read_position(handle), "both", 12_000, 400)
+    assert first.text.splitlines()[1:] == [f"{i}: line {i}" for i in range(1, 6)]
+    mgr.advance_read_position(handle, first.structured["last_line"])
+
+    for i in range(6, 9):
+        writer.add(STDOUT, f"line {i}\n".encode())
+
+    second = unread_view(reader, mgr.read_position(handle), "both", 12_000, 400)
+    assert second.text.splitlines()[1:] == [f"{i}: line {i}" for i in range(6, 9)]
+    assert second.structured["first_line"] == 6 and second.structured["last_line"] == 8
+
+
+def test_budgeted_unread_result_reports_a_correct_continuation(tmp_path: Path) -> None:
+    mgr = manager(tmp_path)
+    writer = mgr.create({}, fallback_codepage=None)
+    for i in range(1, 501):
+        writer.add(STDOUT, f"line {i:04d} padding padding padding\n".encode())
+    writer.finish()
+    mgr.release(writer)
+    reader = mgr.open(writer.meta.handle)
+
+    view = unread_view(reader, 0, "both", 2_000, 400)  # far too small a budget for 500 lines
+    assert view.structured["truncated"] is True
+    last = view.structured["last_line"]
+    assert last < 500
+    assert f"offset={last + 1}, limit=" in view.text
+    assert "earlier lines via" not in view.text  # forward reading, not the tail-style phrasing
+
+
+def test_unread_view_reports_a_read_position_inside_a_dropped_range(tmp_path: Path) -> None:
+    mgr = manager(tmp_path, cap=800)
+    writer = mgr.create({}, fallback_codepage=None)
+    for i in range(1, 21):
+        writer.add(STDOUT, f"line {i:03d} {'x' * 40}\n".encode())  # distinct lines: no folding
+        if writer.meta.dropped_lines > 0:
+            break
+    else:
+        pytest.fail("expected some lines to have been dropped by now")
+    writer.finish()
+    mgr.release(writer)
+    reader = mgr.open(writer.meta.handle)
+
+    dropped = reader.dropped_range()
+    assert dropped is not None
+    view = unread_view(reader, 0, "both", 12_000, 400)  # position 0: before/inside the drop
+    assert f"lines {dropped[0]:,}-{dropped[1]:,} were dropped" in view.text
+    first_shown = next(line for line in view.text.splitlines() if line and line[0].isdigit())
+    shown_line_no = int(first_shown.split(":", 1)[0])
+    assert shown_line_no == dropped[1] + 1
+
+
+def test_explicit_modes_do_not_move_the_read_position(tmp_path: Path) -> None:
+    mgr = manager(tmp_path)
+    writer = mgr.create({}, fallback_codepage=None)
+    for i in range(1, 21):
+        writer.add(STDOUT, f"line {i}\n".encode())
+    writer.finish()
+    mgr.release(writer)
+    handle = writer.meta.handle
+    reader = mgr.open(handle)
+
+    assert mgr.read_position(handle) == 0
+    tail_view(reader, 5, "both", 12_000, 400)
+    range_view(reader, 1, 5, "both", 12_000, 400)
+    grep_view(reader, "line", 0, "both", 12_000, 400)
+    assert mgr.read_position(handle) == 0  # none of the explicit modes touched it

@@ -88,16 +88,56 @@ Any MCP client that speaks protocol `2025-11-25` (initialize handshake) or `2026
   `Get-Content -Raw` and run as a script block). envelope never creates `.ps1` files and never uses
   `-EncodedCommand`, `-ExecutionPolicy Bypass` or `Invoke-Expression`. cmd receives the command
   line directly and is limited to 8,191 characters.
-- **Timeouts and cleanup:** default 120 s, maximum 3,600 s. When a command times out or is
-  cancelled, its whole process tree is killed. If envelope itself dies, the commands it started
-  are killed too. On Linux the launch shim is a child subreaper with a parent-death signal. On
-  Windows, envelope and each run are placed in kill-on-close Job Objects. On macOS, cleanup is
-  best-effort: descendants that call `setsid()` can escape.
+- **Timeouts and cleanup:** no deadline by default (`default_timeout_s` is unset; set it to restore
+  one); maximum 3,600 s. When a command times out, is stopped, is evicted or envelope itself dies,
+  its whole process tree is killed. On Linux the launch shim is a child subreaper with a
+  parent-death signal. On Windows, envelope and each run are placed in kill-on-close Job Objects.
+  On macOS, cleanup is best-effort: descendants that call `setsid()` can escape.
 - **Output:** stdout and stderr are captured separately, in arrival order. They are decoded as
   UTF-8, as UTF-16, or in the console code page for cmd and Windows PowerShell, and saved in full
   to the spool (up to 64 MiB per run, keeping head and tail). Results show at most 12,000
   characters and 400 lines. When output is cut, the result says exactly how to get the rest with
   `output(...)`.
+
+## Background processes
+
+`run` waits up to `wait_s` (default 30 s, maximum `wait_max_s`) for the command to finish. A
+command still running at that point is **handed back**: the result names its output handle and
+keeps running, instead of blocking the call. Four tools cover the whole lifecycle:
+
+- **`run(..., wait_for=...)`** — wait for a condition instead of (or in addition to) the command
+  finishing: `"exit"` (default), `"regex:<pattern>"` (a line matches, including the unterminated
+  last line), `"port:<n>"` (the command's own tree listens on TCP port `n`), or `"idle:<seconds>"`
+  (no output for that long). Common spellings are coerced (`"port 3000"`, `":3000"`,
+  `"localhost:3000"`, `"http://localhost:3000"`). A wait ending because the condition was met, the
+  process finished first, or the wait simply expired are all normal results, never tool errors.
+- **`output(handle=..., wait_s=..., wait_for=...)`** — same wait conditions, for a handle you
+  already have; with no read mode given it returns only the lines not yet shown (or the tail, the
+  first time).
+- **`run(..., name="web")`** — names a long-lived process. A later `run` with the same name joins
+  the running process (and its own `wait_s`/`wait_for`) instead of starting a copy; `restart: true`
+  validates and authorizes the new command first, then stops the old process and starts the new
+  one under the same name. `output`/`stop` accept a name wherever they accept a handle.
+- **`stop(handle=..., grace_s=...)`** — SIGTERM (POSIX) or, where deliverable through envelope's own
+  launch chain, a CTRL+BREAK console event (Windows), then a forced kill after `grace_s` (default
+  `stop_grace_s`, maximum `stop_grace_max_s`). Safe to call on an already-finished process.
+- **`processes(all=...)`** — lists processes started this session: by default those still running
+  and those finished but not yet read; `all: true` includes everything with a still-valid handle.
+
+A process the live-process cap (`max_running`) had to evict, or one that hit `timeout_s` or
+`max_lifetime_s` after being handed back, is reported once: either in the result of the call that
+caused it, or as a one-line notice piggybacked on the next result from any tool.
+
+**Client timeout interaction:** a client-side request timeout shorter than the wait cancels the
+underlying MCP call. For `run`, that terminates the command's whole tree (nothing was handed back
+yet, so there is nothing to continue); for `output`/`processes`, it only ends the wait, leaving the
+process untouched; a `stop` already in flight still completes. Set your client's per-call timeout
+above `wait_max_s` if you don't want waits to race it.
+
+**macOS limitations (unverified; best-effort):** a graceful `stop` signals the command's whole
+process group, which a descendant can escape with `setsid()`; TCP port ownership for `wait_for:
+"port:..."` and the port-in-use hint falls back to an unverified local `connect` rather than a
+verified owner lookup; the quiet-process hint has no CPU sampling, so it never fires.
 
 ## Configuration
 
@@ -112,8 +152,15 @@ or `%APPDATA%\envelope\config.toml`, or the path given by `--config` / `ENVELOPE
 | `default_shell` | automatic | Windows: git-bash → pwsh → powershell → cmd; macOS/Linux: login shell if supported → bash → sh |
 | `shells` | `{}` | custom shells, see below |
 | `default_cwd` | start directory | working directory when `cwd` is omitted |
-| `default_timeout_s` / `max_timeout_s` | 120 / 3600 | timeouts; larger requests are clamped with a note |
-| `max_concurrency` | 8 | concurrent `run` calls; waiting counts toward the timeout |
+| `default_timeout_s` / `max_timeout_s` | unset / 3600 | `default_timeout_s` restores a hard kill deadline for every command when set; larger requests are clamped with a note |
+| `max_concurrency` | 8 | **deprecated**, alias of `max_running` (same source as `max_running` is an error) |
+| `wait_default_s` / `wait_max_s` | 30 / 300 | how long `run`/`output` wait before handing back a running result |
+| `max_running` | 16 | live-process cap; exceeding it evicts or refuses per `evict_policy` |
+| `evict_policy` | `lru-unnamed` | `lru-unnamed` evicts the least-recently-used unnamed process, or `refuse` |
+| `max_lifetime_s` | unset | second kill deadline for a handed-back process, independent of `timeout_s` |
+| `stop_grace_s` / `stop_grace_max_s` | 5 / 60 | default and maximum grace period before `stop` forces a kill |
+| `input_hint_after_s` | 10 | quiet period before the no-output-yet / console-prompt hints are assessed |
+| `processes_limit` | 20 | maximum entries `processes` lists |
 | `progress_interval_s` | 5 | progress notification interval (when the client sends a progress token) |
 | `env_defaults` | see above | environment defaults for every command |
 | `env_scrub` | `["*_API_KEY", "*_TOKEN", "*_SECRET", "OPENROUTER_*"]` | inherited variables to remove |

@@ -22,11 +22,23 @@ class RunReport:
     timed_out: bool = False
     timeout_s: float = 0.0
     cancelled: bool = False
+    running: bool = False
+    """Handed back while still running (design B1); ``exit_code``/``signal``
+    stay ``None`` and ``meta``/``rendered`` reflect the spool so far."""
+    unterminated_lines: Sequence[str] = ()
+    """Each stream's current no-newline-yet line, pre-formatted; only set
+    when ``running`` (design B4)."""
     meta: SpoolMeta | None = None
     rendered: Rendered | None = None
     hints: Sequence[Hint] = ()
     notes: Sequence[str] = ()
     decision: dict[str, Any] | None = None
+    end_reason: str | None = None
+    """``exit``, ``timeout``, ``lifetime``, ``stop``, ``eviction``, ``cancel``
+    or ``shutdown`` (design B15); unset for a running result."""
+    name: str | None = None
+    graceful: bool | None = None
+    """Whether a `stop` was graceful or forced; unset outside `stop`."""
     extra: dict[str, Any] = field(default_factory=lambda: dict[str, Any]())
 
 
@@ -40,6 +52,8 @@ def format_duration(seconds: float) -> str:
 
 
 def status_text(report: RunReport) -> str:
+    if report.running:
+        return "running"
     if report.cancelled:
         return "cancelled"
     if report.timed_out:
@@ -95,10 +109,11 @@ def run_text(report: RunReport) -> str:
             parts.append(
                 f"[binary output on {name}: {count:,} bytes{f' ({kind})' if kind else ''}]"
             )
-        if not rendered.body and not binary:
+        if not rendered.body and not binary and not (report.running and report.unterminated_lines):
             parts.append("(no output)")
     else:
         parts.append("(no output)")
+    parts.extend(report.unterminated_lines)
     parts.extend(report.notes)
     parts.extend(hint.text for hint in report.hints)
     return "\n".join(parts)
@@ -106,6 +121,7 @@ def run_text(report: RunReport) -> str:
 
 def run_structured(report: RunReport) -> dict[str, Any]:
     data: dict[str, Any] = {
+        "state": "running" if report.running else "finished",
         "exit_code": report.exit_code,
         "signal": report.signal,
         "timed_out": report.timed_out,
@@ -143,5 +159,11 @@ def run_structured(report: RunReport) -> dict[str, Any]:
         data["hints"] = [hint.id for hint in report.hints]
     if report.decision is not None:
         data["decision"] = report.decision
+    if report.end_reason is not None:
+        data["end_reason"] = report.end_reason
+    if report.name is not None:
+        data["name"] = report.name
+    if report.graceful is not None:
+        data["graceful"] = report.graceful
     data.update(report.extra)
     return data

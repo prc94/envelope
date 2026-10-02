@@ -68,6 +68,21 @@ class Process(Protocol):
 
     def close(self) -> None: ...
 
+    def tree_pids(self) -> frozenset[int] | None:
+        """Every live PID of this command's tree, for `port:` waits (design
+        B5); `None` where the platform offers no way to enumerate it (called
+        from the event loop, so this must not block)."""
+        ...
+
+    def request_graceful_stop(self) -> bool:
+        """Ask the tree to terminate gracefully where the platform can
+        deliver such a request (SIGTERM on POSIX; CTRL+BREAK on Windows
+        where deliverable through envelope's launch chain -- design B7).
+        Returns whether a request was actually sent, not whether the tree
+        honoured it; callers still must fall back to ``terminate_tree()``
+        after a grace period."""
+        ...
+
 
 class Backend(Protocol):
     def spawn(

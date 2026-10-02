@@ -105,3 +105,20 @@ def test_windows_crash_code_header() -> None:
 
 def test_signal_header() -> None:
     assert run_text(report(exit_code=None, signal=9)).startswith("signal 9 (SIGKILL) |")
+
+
+def test_end_reason_and_name_in_structured() -> None:
+    structured = run_structured(report(end_reason="timeout", name="web"))
+    assert structured["end_reason"] == "timeout"
+    assert structured["name"] == "web"
+
+
+def test_graceful_in_structured() -> None:
+    assert run_structured(report(graceful=True))["graceful"] is True
+    assert run_structured(report(graceful=False))["graceful"] is False
+    assert "graceful" not in run_structured(report())
+
+
+def test_running_result_structured_size() -> None:
+    r = report(running=True, exit_code=None, name="web", unterminated_lines=["partial line"])
+    assert len(str(run_structured(r))) < 1000

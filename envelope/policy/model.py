@@ -19,9 +19,12 @@ class ExecRequest:
     env: dict[str, str] = field(default_factory=lambda: dict[str, str]())
     """Only the variables explicitly supplied by the caller."""
     stdin_supplied: bool = False
-    timeout_s: float = 0.0
+    timeout_s: float | None = None
+    """``None`` means no deadline (design B15; was the ambiguous ``0.0``)."""
     client: dict[str, Any] | None = None
     kind: Literal["exec"] = "exec"
+    name: str | None = None
+    restart: bool = False
 
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
