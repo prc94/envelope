@@ -78,6 +78,6 @@ Their outcomes are recorded in design.md before the dependent tasks start; the s
 Implementation and evaluation-report production above are complete; they do not imply that B16's
 acceptance gate has passed. Keep the change active until the following checks are complete.
 
-- [ ] 10.1 Resolve the OpenCode/Qwen3.8 Flash task-loss failure while retaining all four tools; verify exact task transport with a local model stub and task correctness in a focused real-model diagnostic, recording both successful and unsuccessful interventions in design B16.
+- [x] 10.1 Resolve the OpenCode/Qwen3.8 Flash task-loss failure while retaining all four tools; verify exact task transport with a local model stub and task correctness in a focused real-model diagnostic, recording both successful and unsuccessful interventions in design B16.
 - [ ] 10.2 Rerun the affected regression gate after an evidenced fix, preserving B16's declared success and token margins, and record the complete verdict. Acceptance requires both lane gates to be met; an inconclusive result leaves this task open.
 - [x] 10.3 Run the final lint, type checks and tests; commit the completed implementation, harness corrections and evaluation records. Do not archive while task 10.2 remains open.

@@ -336,6 +336,25 @@ OpenCode request capture, byte-preserving stdin through the containment launcher
 instruction upload, and Linux/Windows stdin path handling. Local validation does not stand in
 for either lane's acceptance gate. The core follow-up is committed as `ae5499d`.
 
+Authorized remote follow-up (2026-10-12): the corrected stdin pilot completed all 30 trials
+(`prompt-pilot-stdin-20261012`), with P3a 15/15 and P2 15/15. All three workers completed
+successfully, the provider credential scan was clean, and no trial had infrastructure failure,
+missing-task response or incorrect final answer. The five tasks include the 40-second command
+and long-output retrieval that previously crashed. All four P3a tools remained offered. Task
+10.1 is complete for the explicitly configured concise OpenCode/Qwen profile; this does not
+establish that the stock OpenCode build-agent prompt is reliable for this model.
+
+The full Linux (252 trials, four workers) and Windows (180 trials, two workers) gates are now
+running as Mercury services `envelope-regression-{linux,windows}-20261012.service`, writing to
+`eval/results/regression-{linux,windows}-followup-20261012`. Original trial indices, seeds, tasks,
+baseline revision and B16 margins are retained. Workers partition the original plan by stride;
+the merged report restores original trial order and preserves each worker's build provenance.
+Windows retains its original Qwen Code profile. No acceptance verdict is recorded until both
+complete reports are available; task 10.2 remains open. Early gate progress is delayed by
+upstream HTTP 429 responses for DeepSeek (DeepInfra shared-pool rate limiting). The runner
+retains its existing per-model cooldown and bounded deferral; unavailable trials cannot be
+used as a non-inferiority verdict.
+
 ## Risks / Trade-offs
 
 - [Behaviour change: commands over 30 s now return a handle; a model that ignores it may answer without the result] → running results end with literal next calls and "do not start it again"; `interop-long`, `build-outlives-wait` and `long-wait` measure it; `wait_default_s` can be raised.
