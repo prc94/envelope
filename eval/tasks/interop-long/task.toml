@@ -1,5 +1,5 @@
 id = "interop-long"
-version = 1
+version = 2
 category = "interop"
 lanes = ["linux", "windows"]
 shells = ["bash", "git-bash"]

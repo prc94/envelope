@@ -1,0 +1,10 @@
+id = "stop-cleanup"
+version = 2
+category = "background-processes"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["background-processes"]
+baseline_eligible = false  # the judge reads envelope's audit log (stop/process_end); a native shell leaves no comparable evidence
+known_gaps = []
+modifiable_paths = []
+timeout = 300

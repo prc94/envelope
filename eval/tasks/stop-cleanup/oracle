@@ -1,0 +1,6 @@
+[
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} -u server.py", "wait_s": 0}, "save_as": "server"},
+  {"tool": "output", "arguments": {"handle": "$server", "wait_for": "regex:READY", "wait_s": 10}, "expect_wait": "condition_met"},
+  {"tool": "stop", "arguments": {"handle": "$server"}},
+  {"tool": "run", "arguments": {"command": "echo done"}, "expect_exit": 0, "answer_from": true}
+]

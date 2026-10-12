@@ -143,6 +143,199 @@ Tool-call records gain `state`, `end_reason`, `handle`, `name`, `wait` (`conditi
 - **Oracles** for background tasks run several envelope calls (start, wait, probe, stop); the oracle runner gains multi-call scripts.
 - Screening first (3 trials); a decision job for the `default-wait` lever only if screening shows a difference.
 
+Implementation record (2026-10-02): the seven new oracles passed against the Linux and Windows
+builds, and the coverage report lists all seven tasks on both lanes. `regression-background-linux` and
+`regression-background-windows` pin the P2 arm to commit `f67014f`, interleave it with the
+working-tree P3a build on the existing screening slices, and declare the 5-point success and
+10% token non-inferiority margins. Both background screening jobs plan three trials per cell;
+their reports retain the harness dimension. The first full Linux pytest run reported 545 passed;
+the final post-fix run is recorded below.
+The Linux Docker target now stages both builds into each trial container for the interleaved
+gate; the Windows jobs use `C:\eval\p3a-oracle` so the P2 baseline location is preserved.
+
+Evaluation record (2026-10-04): the first complete gate and screening runs exposed an invalid
+Qwen transcript: P3a's union-type `wait_for` schema made Qwen print a non-JSON warning, and the
+eval parser stopped before the valid final answer. The schema now uses `oneOf`, and the parser
+skips complete plain-text warnings. A focused P2/P3a check passed for both builds with complete
+transcripts. Both gate jobs were rerun. Linux completed 252/252 trials: success non-inferiority
+met (estimate -0.008, 95% interval [-0.024, 0]), while token non-inferiority was inconclusive
+(estimate -0.083, interval [-0.221, 0.037]). Windows completed 180/180 trials after one invalid
+`NUL`-device archive trial was replayed with the eval transport fix: success was inconclusive
+(estimate -0.044, interval [-0.100, 0]) and tokens were inconclusive (estimate -0.060, interval
+[-0.112, -0.007]). Neither overall gate is met. The original screening reports were generated
+before the transcript fix, so their scores are diagnostic only and need rerunning before 8.7 can
+be checked. The comparison resamples task/model strata (21 Linux, 30 Windows), so simply adding
+repetitions to the same cells will not directly increase the number of bootstrap strata.
+
+Follow-up diagnosis (2026-10-04): the Windows AppLocker failures were replayed with a more
+explicit exit-code hint; all three P3a seeds still failed, so the hint was reverted. Gateway
+metadata for the corrected gates show about 200 more first-prompt tokens for P3a in each Qwen
+model/lane group. Linux Qwen trials averaged 8.62 main-model turns for P2 and 8.98 for P3a;
+Windows Qwen averaged 8.31 and 8.33. The larger P3a tool schema therefore has a measurable
+prompt cost, while additional turns and trial variability also contribute to total-token
+differences. This is diagnostic evidence, not a new gate verdict. The declared margins and
+comparison method remain unchanged; further full gate runs should follow an evidenced product
+improvement, and the background screening scores still need a corrected-parser rerun.
+
+Schema wording pilot (2026-10-04): a compact description variant reduced the four rendered tool
+definitions from 5,810 to 4,531 JSON characters (22%). The control variant's Envelope source
+hash exactly matched the corrected P3a Linux gate build. The 24-trial Linux Qwen Code pilot
+(`eval/results/pilot-schema-linux-mercury-20261004` on Mercury) covered `interop-basic` and
+`files-duplicates`, Qwen and z-ai models, three trials per arm/cell. All 24 trials passed with no
+infra or truncated transcripts. Compact versus control median main-model tokens changed by
+-1.6% and -1.8% on `interop-basic` (Qwen, z-ai), -12.1% on `files-duplicates` with Qwen, and
++12.3% on `files-duplicates` with z-ai. The compact variant lowered post-discovery prompt sizes,
+but turn-count variation dominated total tokens. This small, exploratory pilot did not establish
+a reliable regression-gate improvement. Its arms also used different fixture seeds, so the
+wording was temporarily reverted pending an exact-seed follow-up.
+
+The exact-seed follow-up (`eval/results/pilot-schema-paired-linux-mercury-20261004` on Mercury)
+used two seeds per task/model cell, with each seed run once per arm. All 16 trials passed; none
+had an infra result or truncated transcript. Compact wording used fewer main-model tokens in
+7 of 8 pairs. One pair had provider 429 responses in both arms; among the seven pairs without
+relayed provider errors, compact used fewer tokens in six, with a median reduction of 2.0%
+(mean 7.5%). The remaining clean pair used 1.5% more. This supports retaining the shorter
+descriptions as a modest prompt-cost improvement, but is exploratory and does not replace the
+declared regression gate. The B16 gate verdict remains unchanged.
+
+Windows loss-cell diagnostic (2026-10-04): an exploratory 18-trial job on Mercury
+(`eval/results/diagnostic-windows-paired-20261004`) replayed three fresh, identical fixture
+seeds per P2/P3a pair for each loss cell. All 18 trials were scored, with no infrastructure
+failures or truncated transcripts. On DeepSeek `applocker-blocked-copy`, P2 passed 3/3 and
+compact P3a passed 1/3. On Qwen `interop-truncation`, P2 passed 2/3 and P3a passed 3/3. On z-ai
+`files-duplicates`, both passed 3/3. The P2 Qwen failure miscopied a token that the `output`
+tool had returned correctly. In one P3a AppLocker failure, the `run` result included the
+git-bash shell status `126`, but the model answered that the blocked executable had no genuine
+exit code; the other failure timed out after the model kept trying alternative launch routes.
+The final P3a AppLocker pass also saw the block and reported `126`. These traces show a repeated
+AppLocker model-answer weakness but no missing shell output or confirmed Envelope execution
+fault. This small, selected-cell diagnostic is not a replacement for either declared gate.
+The corrected-parser Linux and Windows background screening reruns were started on Mercury after
+the diagnostic; their reports are still pending. The Linux job's 8-hour cap stopped its first
+screening run at 270/306 trials, so a Mercury systemd continuation now waits for the corrected
+run, executes any missing trial indices using the same source hash, and merges a complete report.
+
+Screening validity follow-up (2026-10-05): the corrected Linux run produced 306 rows, but all
+153 Qwen rows were `unavailable` after its canary tool-set check saw tools from another arm.
+The gateway retains a ledger by trial ID across runs; reusing the same screening job name
+reused canary IDs from the earlier run and its remainder, contaminating the ledger. The 153
+OpenCode rows are scored and retained. A Qwen-only recovery on Mercury uses a fresh job name
+for each part and will merge those rows with OpenCode after all 153 Qwen trials are scored.
+The runner now adds a random per-run suffix to gateway trial IDs to prevent future reruns from
+reading previous ledger entries. The Windows screening was still running with valid scored
+rows and no truncated transcripts when this issue was found. The Linux screening scores are
+not findings until the Qwen recovery and merged report are complete.
+
+Validity review (2026-10-08): both screenings completed (Linux 306/306 merged, Windows 153/153),
+but two harness defects invalidate parts of them and of the gates. (1) The OpenCode adapter only
+configured envelope's MCP server for tool names starting `envelope_`, while every job names them
+`mcp__envelope__*`; OpenCode envelope arms therefore ran with no tools at all (about 85% of OpenCode
+trials in both P2 and P3a gate arms made no tool call), and the gateway check only rejected extra
+tools, not missing ones. The adapter now maps `mcp__envelope__X` to OpenCode's `envelope_X`, the
+gateway check also rejects configured tools that were never offered, and reports count no-tool
+trials per cell. All OpenCode envelope-arm results so far, including the OpenCode half of the
+Linux gate, are void; the Windows gate (Qwen only) is unaffected. (2) The `long-wait` and
+`build-outlives-wait` judges required a specific wait path (a handed-back `run`, an expired `output`
+wait) that native arms can never produce and a model using one long `wait_s` legitimately avoids;
+nearly every failure had the correct final line. Both judges (version 2) now score the per-trial
+secret final line and keep the path as observations. Re-scored with the new judges, the Qwen
+screening rows give `long-wait` 9/9 on both envelope arms and 5/9 native per lane, and
+`build-outlives-wait` 8/9 and 7/9 (default), 9/9 (wait-10s), 8/9 native. Task 8.7 stays open until
+the OpenCode cells and the Linux gate are rerun.
+
+Current-build record (2026-10-09): both gates were rerun in full on the current P3a build (compact
+tool descriptions, source `f77a405e`; the 2026-10-04 gates had measured the earlier verbose build
+`59150954`, so neither earlier verdict applies to it) against the unchanged P2 build `0265c13e`,
+with the fixed OpenCode adapter, in shards on Mercury (`eval/results/regression-background-{linux,
+windows}-current-build-20261008`). Linux, 252/252 trials: success estimate -0.071, 95% interval
+[-0.135, -0.016] → inconclusive, leaning against P3a; tokens -0.090, [-0.201, +0.011] →
+inconclusive. Windows (Qwen Code only), 180/180: success -0.000, [-0.056, +0.067] → inconclusive;
+tokens -0.076, [-0.148, -0.001] → inconclusive. Neither gate is met. Every Linux success loss sits in
+one cell, OpenCode with qwen3.8-flash on P3a (18/27 against 27/27 for P2; OpenCode with DeepSeek and
+GLM and every Qwen Code cell are 100% on both arms): in most of the failing trials the model's first
+reply is "Ready. What would you like me to do?" or similar, with no tool call, as if the task were
+missing; P2 never did this. The token cost is the larger tool schema (the same canary request is about
+530 prompt tokens bigger under P3a with OpenCode). Windows shows no success difference; P3a won
+`applocker-blocked-copy` 7/9 against 4/9 and lost three tasks by one trial each, two of them DeepSeek
+timeouts.
+
+The OpenCode half of the Linux background screening was rerun with the fixed adapter and merged with
+the re-judged Qwen rows (`screening-background-linux-opencode-fixed-20261008`, 306/306). Totals
+(default / native / wait-10s): Linux OpenCode 44/63, 23/63, 23/27; Linux Qwen Code 55/63, 18/63,
+27/27; Windows Qwen Code 48/63, 17/63, 26/27 (Windows rows re-judged with judge v2). The envelope
+arms lead clearly on `dev-server-probe` and, for Qwen Code, `long-wait`. The native arms' 0/9 on
+`port-in-use`, `restart-after-edit` and `stop-cleanup` is partly by construction: those judges read
+envelope-only evidence (the port-in-use hint, `restart`, the audit log's `stop`/`process_end`), the
+same defect the long-job judges had, so those native baselines are not comparable yet.
+`watch-rebuild` is near 0 for every arm and needs a task review. Default versus `wait-10s` shows no
+difference worth a decision job. Parallel shards raised median trial duration by about 40% (provider
+latency) without changing pass rates or retries; the timeouts' lean towards P3a was already present
+in the serial runs.
+
+Judge corrections and diagnostic (2026-10-09). The `port-in-use`, `restart-after-edit` and
+`watch-rebuild` judges (version 2) now score outcomes only: the owner's served identity; a
+`version=1` then `version=2` request (the server reads its config once at start-up, so that proves
+the restart); and the watcher's hash of whatever bytes the edit wrote (with or without the trailing
+newline, or CRLF). The hint, the `restart` parameter and the `output` read count are metrics.
+`stop-cleanup` (version 2) is envelope-only (`baseline_eligible = false`): a native shell leaves no
+evidence that tells an agent's stop from the harness's session-end kill. Result rows now keep
+`collect.py`'s observations so later judge fixes can be re-scored offline. Rerun of the four tasks
+(`rejudge-background-{linux,windows}-current-build-20261009`, 189/189), envelope default against
+native: Linux OpenCode 34/36 against 15/27; Linux Qwen Code 35/36 against 7/27; Windows Qwen Code
+36/36 against 9/27. Most native failures are timeouts with the shell blocked on the foreground server
+or watcher; `watch-rebuild` on envelope rose from about 0 to 25/27, confirming the byte-exactness
+defect.
+
+The Linux gate's loss was isolated with a 120-trial diagnostic (OpenCode, qwen3.8-flash, the five
+affected tasks, 6 trials each; `diagnostic-opencode-qwen-linux-current-build-20261009`): P2 28/30,
+P3a 14/30, P3a offering only `run` and `output` 28/30, P3a with the pre-2026-10-04 verbose
+descriptions 18/30. The six no-tool "what would you like me to do?" failures all occurred with four
+tools offered. The regression is associated with offering four tools; changing their wording did not
+resolve it in this diagnostic. The other models and Qwen Code are unaffected. The OpenCode
+adapter now switches off envelope tools an arm does not list (it had offered all four to a two-tool
+arm, which the tool-set check rejected).
+
+Transport investigation (2026-10-12): a local recording model behind the real OpenCode 1.18.35
+CLI confirmed that `run` quotes any positional argument containing spaces and escapes quotes
+inside it. The adapter had supplied the whole task as one argument, so model-visible task text
+was altered. An initial split-on-spaces workaround preserved task text locally, but real-target OpenCode
+1.18.32 coerced numeric words after `--` into numbers and crashed (`G.includes is not a
+function`) on the long-wait and truncation tasks. The adapter now uses the CLI's piped-input
+path, with the launcher reading a UTF-8 instruction file into stdin. This preserves repeated
+spaces, quotes, numeric words, tabs and newlines without positional-argument parsing. A real-CLI
+regression test verifies exact text and the offered tool set with both two and four tools, using
+a local fake model and no provider credentials. This correction applies equally to all OpenCode
+arms and does not alter the MCP catalog, model settings or evaluation margins.
+
+Initial capped first-turn probes on the gateway retained all four tools. Adding an explicit
+task-execution reminder did not eliminate the missing-task response (both forms called `run`
+5/6 times). A subsequent paired comparison of the CLI's quoted form with verbatim text still
+produced missing-task responses and invented command arguments. Therefore the transport defect
+is real, but fixing it is not yet evidence of resolving the Qwen model failure. First-turn tool
+use alone is insufficient: probes must also check the command against the task. These probes
+are exploratory and do not replace B16's gate. Acceptance is now tracked explicitly in tasks
+10.1–10.3, separately from completed implementation and report-production tasks.
+
+Further first-turn probes compared requested command arguments, not just tool use. Disabling
+reasoning and changing the system-message cache prefix did not resolve the failure. Replacing
+OpenCode's default build-agent prose with a concise task-execution prompt produced 12/12 exact
+commands versus 4/12 under the stock prompt in the paired exploratory run
+`first-turn-probe-420fd9771798`. The evaluation adapter supports this as an explicit per-model
+job setting; `regression-background-linux.toml` applies the same prompt to both P2 and P3a for
+OpenCode/Qwen3.8 Flash. The MCP catalog remains unchanged, and other model profiles retain the
+stock prompt. This is a prospective evaluation profile, not a re-scoring of the earlier gate.
+
+The first real-task pilot (`prompt-pilot-20261012`) was stopped after 23 recorded trials:
+14 scored passes (7 per arm) and 9 infrastructure failures. It is not acceptance evidence:
+numeric-argv crashes occurred before the gateway saw the required tool catalog.
+The passing scored trials were encouraging, but the corrected stdin transport needs a clean
+pilot and the full declared regression gate. As of this investigation, tasks 10.1 and 10.2
+remain open. Final local validation passed: lint, strict type checks, 566 tests in 584.18 seconds,
+`openspec validate add-background-processes --strict`, and the zipapp build. This includes real
+OpenCode request capture, byte-preserving stdin through the containment launcher, trial
+instruction upload, and Linux/Windows stdin path handling. Local validation does not stand in
+for either lane's acceptance gate. The core follow-up is committed as `ae5499d`.
+
 ## Risks / Trade-offs
 
 - [Behaviour change: commands over 30 s now return a handle; a model that ignores it may answer without the result] → running results end with literal next calls and "do not start it again"; `interop-long`, `build-outlives-wait` and `long-wait` measure it; `wait_default_s` can be raised.
@@ -175,13 +368,39 @@ Driven over SSH against the real `envelope@192.168.94.172` target (git-bash, cmd
 
 **7.4 (Windows "no terminal input"): confirmed, both allowed outcomes seen.** `choice /C YN /M Continue` under cmd fails fast ("the file is either empty or does not contain the valid choices") reading the redirected `DEVNULL` stdin; PowerShell's `Read-Host` fails fast with "PowerShell is in NonInteractive mode." Neither hangs.
 
-**9.1 (Windows-marked suite): partial — real findings, not yet fixed.** No pytest existed on the VM; installed via `pip install --user pytest` (disclosed to and approved by the user after the fact, since it was done without asking first per standing instructions). Running `tests/unit` there (183 passed, 13 skipped) surfaced two genuine Windows gaps in the already-"done" live-spool work (tasks 3.1/3.2), never previously run on real Windows:
+**9.1 (initial Windows suite run):** No pytest existed on the VM; installed via `pip install --user pytest` (disclosed to and approved by the user after the fact, since it was done without asking first per standing instructions). Running `tests/unit` there (183 passed, 13 skipped) surfaced two Windows failures in the live-spool tests (tasks 3.1/3.2):
 - `test_live_reader_degrades_to_dropped_when_a_segment_file_is_missing_under_it` — `Path.unlink()` on an open segment file raises `PermissionError` on Windows (POSIX allows deleting an open file; Windows does not). The live-spool code was written and tested only against POSIX unlink semantics.
 - `test_second_manager_cleanup_removes_a_stale_owner` — a second `SpoolManager`'s `cleanup()` does not remove a stale-owner spool directory on Windows, plausibly the same open-handle issue: a segment file still open (even by a different `SpoolWriter` instance in the same process here) blocks directory/file removal on Windows in a way POSIX's unlink-of-open-file semantics do not.
 
 Two other failures in that run are not real gaps: `test_no_config_file_uses_defaults` assumes `XDG_CONFIG_HOME` affects Windows config resolution (it doesn't; Windows uses `%APPDATA%`, a pre-existing P1 test/platform mismatch, not introduced by this change) and `test_readme_settings_table_lists_every_key` failed only because the ad hoc source copy sent to the VM for this check omitted `README.md`.
 
-**Not done:** 9.1's Linux-side bar (`lint`, `types`, `test -q`) passes; the full Windows-marked suite does not fully pass yet (the two live-spool findings above are unresolved), so 9.1 is not marked complete. 9.2 (end-to-end through Qwen Code) was not attempted this pass — Qwen Code exists on the VM from earlier eval-harness work, but driving a full agent session was out of scope for this VM visit; the manual driver-script testing above exercises the same code paths directly.
+**Follow-up (2026-10-02):** The two live-spool tests now release writer file handles before
+simulating deletion or a dead owner, matching what actually happens when an owner exits on
+Windows. Stale-owner cleanup also had a genuine Windows bug: `os.kill(pid, 0)` reported an
+ambiguous error for an exited process, and `_owner_alive` treated it as live. It now checks the
+process object's signaled state with `OpenProcess`/`WaitForSingleObject`; access-denied remains
+conservatively live. The config test sets `%APPDATA%` on Windows. With the updated source under
+`C:\eval\p3a-oracle\source`, `python -m pytest -q tests/unit tests/protocol` reports **200 passed,
+13 skipped**; output is in `eval/results/p3a-windows-oracles/windows-pytest.txt`. A fresh target
+fingerprint reports OEM 866, ANSI 1251, Qwen 0.24.5, the enforced AppLocker policy hash
+`9b29c29ba06d90394f931714f07a18506c01c2778bee3189e9d25e49d4c0d716`, and WDAC policy
+SHA-256 `300eb4e96bfdfe5d5f010576223670311bce7efd15b63d56420f41300688a3d7`.
+
+**9.2 (Qwen Code end to end, 2026-10-02):** Real Qwen Code 0.24.5 on the VM was driven by a
+scripted local OpenAI-compatible model (zero provider spend). Eight MCP calls started a named
+git-bash `http.server` with `wait_for: "port:39391"`, fetched `first` with `curl`, edited the
+page, restarted the same name, listed the running server, fetched `second`, stopped by name, and
+listed again. The audit contains both `process_end` records and the `stop` call with
+`graceful: true`; the launcher reports no leftovers from its Toolhelp32 job-member check.
+Transcript: `eval/results/p3a-windows-qwen-e2e/transcript.jsonl`; audit:
+`eval/results/p3a-windows-qwen-e2e/audit.jsonl`.
+
+**Final 9.1 gate:** `ENVELOPE_PY=/home/prc94/.local/bin/python3.12 scripts/dev.sh all`
+passed on Linux: Ruff check/format, both Pyright projects (zero errors), and **545 pytest
+tests**. `python3.12 scripts/build.py` produced an 118,119-byte zipapp, SHA-256
+`222e6e4a3e9f63cd21344619dbe7b6b8586e58aa889c1fb86d74e19c88247e2b`. Its copy at
+`C:\eval\p3a-oracle\envelope.pyz` has the same hash, and `dev-server-probe` passed once more
+against that exact final VM artifact. The original P2 zipapp under `C:\eval` was not replaced.
 
 ## Open Questions
 

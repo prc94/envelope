@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import shutil
 import subprocess
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,25 +34,37 @@ def build_variant(
     *,
     name: str = "variant",
     output: str | Path | None = None,
+    revision: str | None = None,
 ) -> BuildVariant:
     repo = Path(repo).resolve()
     with tempfile.TemporaryDirectory(prefix="envelope-variant-") as directory:
         staging = Path(directory) / "repo"
-        shutil.copytree(
-            repo,
-            staging,
-            ignore=shutil.ignore_patterns(
-                ".git",
-                ".codegraph",
-                ".serena",
-                ".pytest_cache",
-                ".ruff_cache",
-                "__pycache__",
-                "*.pyc",
-                "dist",
-                "eval/results",
-            ),
-        )
+        if revision is None:
+            shutil.copytree(
+                repo,
+                staging,
+                ignore=shutil.ignore_patterns(
+                    ".git",
+                    ".codegraph",
+                    ".serena",
+                    ".pytest_cache",
+                    ".ruff_cache",
+                    "__pycache__",
+                    "*.pyc",
+                    "dist",
+                    "eval/results",
+                ),
+            )
+        else:
+            archive = subprocess.run(
+                ["git", "archive", "--format=tar", revision],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            ).stdout
+            staging.mkdir()
+            with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+                source.extractall(staging, filter="data")
         if patch is not None:
             patch_path = Path(patch)
             subprocess.run(

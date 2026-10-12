@@ -112,7 +112,10 @@ class FakeTarget:
     def upload(self, local, remote):
         if self.fail_upload:
             raise ConnectionError("ssh: connection reset")
-        shutil.copytree(local, remote, dirs_exist_ok=True)
+        if local.is_dir():
+            shutil.copytree(local, remote, dirs_exist_ok=True)
+        else:
+            shutil.copyfile(local, remote)
 
     def download(self, remote, local):
         source = Path(remote)
@@ -123,9 +126,11 @@ class FakeTarget:
         else:
             shutil.copy(source, local)
 
-    def run_unit(self, argv, *, env, cwd, timeout, stdout_to):
+    def run_unit(self, argv, *, env, cwd, timeout, stdout_to, stdin_from=None):
         self.events.append("unit")
         self.units.append({"argv": argv, "env": env, "cwd": cwd, "timeout": timeout})
+        if stdin_from is not None:
+            self.units[-1]["stdin"] = Path(stdin_from).read_bytes()
         state = Path(stdout_to).parent
         ws = Workspace(cwd, env["HOME"], str(state), str(state / "audit.jsonl"), "")
         return self.harness(self, ws, stdout_to)
@@ -206,6 +211,9 @@ def test_probe_trial_ids_are_unique_per_cell_not_just_per_index():
     assert trial_id("job", qwen) != trial_id("job", other_model)
     # Real trials (index >= 0) are already unique by index alone; format is unchanged.
     assert trial_id("job", trial(0)) == "job-t00000"
+    # The gateway retains its ledger across job runs, so repeating a plan needs fresh IDs.
+    assert trial_id("job", trial(0), "run-a") != trial_id("job", trial(0), "run-b")
+    assert trial_id("job", qwen, "run-a") != trial_id("job", qwen, "run-b")
 
 
 def test_full_lifecycle_passes_and_cleans_up(tmp_path):
@@ -499,7 +507,10 @@ def test_tools_the_model_was_offered_outside_the_configured_set_make_the_trial_i
     result = executor(trial(1))
     assert result["attribution"] == "infra" and "['edit', 'write_file']" in result["error"]
     # requests without tool names (e.g. auxiliary ones) do not trip the check
-    gateway.rows = [row | {"role": "auxiliary", "tool_names": ["edit"]}]
+    gateway.rows = [
+        row | {"tool_names": ["tool_call", "tool_search"]},
+        row | {"role": "auxiliary", "tool_names": ["edit"]},
+    ]
     assert executor(trial(2))["passed"]
 
 
@@ -620,6 +631,9 @@ def test_a_harness_without_a_tool_report_is_checked_against_the_gateway_instead(
     gateway.rows = [row | {"tool_names": [*sorted(TOOLS), "bash"]}]
     leaked = executor(trial(1))
     assert leaked["attribution"] == "infra" and "['bash']" in leaked["error"]
+    gateway.rows = [row | {"tool_names": []}]  # the harness never started the MCP server
+    dropped = executor(trial(2))
+    assert dropped["attribution"] == "infra" and "never offered" in dropped["error"]
 
 
 def test_a_provider_rejecting_the_models_tool_call_json_is_a_model_failure(tmp_path):
@@ -649,3 +663,22 @@ def test_the_trial_record_names_the_providers_that_served_it(tmp_path):
         dict(gateway.rows[0], provider="Together"),
     ]
     assert executor(trial())["providers"] == ["GMICloud", "Together"]
+
+
+def test_the_trial_record_keeps_what_collect_observed_for_later_rescoring(tmp_path):
+    executor, _, _ = make(tmp_path, good_harness())
+    result = executor(trial())
+    assert result["passed"] and result["observations"].get("ok") is True
+
+
+def test_runner_uploads_the_rendered_instruction_for_stdin_adapters(tmp_path):
+    class StdinAdapter(FakeAdapter):
+        def stdin(self, instruction):
+            return instruction
+
+    executor, target, _ = make(tmp_path, good_harness())
+    executor.adapter = StdinAdapter()
+    result = executor(trial())
+    assert result["passed"], result
+    unit = target.units[0]
+    assert unit["stdin"] == unit["argv"][-1].encode("utf-8")

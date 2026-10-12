@@ -65,6 +65,14 @@ def test_commands_use_batch_mode_keepalive_and_pinned_options():
     assert "UserKnownHostsFile=/kh" in argv and "StrictHostKeyChecking=yes" in argv
 
 
+def test_target_expands_home_in_ssh_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    t = target(key="~/.config/id_ed25519", known_hosts="~/.ssh/known_hosts")
+    options = t._options()
+    assert str(tmp_path / ".config/id_ed25519") in options
+    assert f"UserKnownHostsFile={tmp_path / '.ssh/known_hosts'}" in options
+
+
 def sample_tree(root: Path):
     (root / "logs").mkdir(parents=True)
     (root / "empty").mkdir()
@@ -173,6 +181,24 @@ def test_get_returns_trees_and_files_and_reports_missing(tmp_path):
     assert (tmp_path / "audit.jsonl").read_bytes() == b"\x00\x01"
     with pytest.raises(FileNotFoundError):
         t.get("C:\\x\\missing", tmp_path / "nope")
+
+
+def test_get_skips_windows_device_entries_but_keeps_regular_files(tmp_path):
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        device = tarfile.TarInfo("./NUL")
+        device.type = tarfile.CHRTYPE
+        archive.addfile(device)
+        regular = tarfile.TarInfo("./result.txt")
+        regular.size = 2
+        archive.addfile(regular, io.BytesIO(b"ok"))
+
+    def run(argv, **kw):
+        return done(0, b"dir\n") if "os.path.exists" in argv[-1] else done(0, buffer.getvalue())
+
+    target(run).get("C:\\x\\tree", tmp_path / "after")
+    assert (tmp_path / "after" / "result.txt").read_bytes() == b"ok"
+    assert not (tmp_path / "after" / "NUL").exists()
 
 
 def test_tunnel_is_loopback_only_and_fails_at_setup():

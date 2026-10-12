@@ -1,0 +1,242 @@
+--- a/envelope/tools/run.py
++++ b/envelope/tools/run.py
+@@ -74,13 +74,16 @@
+     s = services.settings
+     default = services.registry.default or "none"
+     description = (
+-        "Run a shell command or script in a non-interactive terminal; return its exit code and "
+-        f"output. Shells: {_shell_list(services)}. Supports builds, git and PowerShell. Each call "
+-        "uses a fresh shell; use cwd/env for state between calls. Stdin is closed unless supplied. "
+-        "If still running after wait_s, the background process keeps running under an out_... "
+-        "handle. Use output to read or wait, stop to end it, and processes to list it. Name a "
+-        "server or watcher to join or restart it instead of starting a copy. Use output to "
+-        "retrieve lines omitted from a shortened result."
++        "Run a shell command or script in a non-interactive terminal session and get its exit code "
++        f"and output. Available shells: {_shell_list(services)}. Use it for builds, tests, git, "
++        "package managers, file and system operations, bash scripts, PowerShell cmdlets and cmd. "
++        "Each call starts a fresh shell process: cd, exports and variables do NOT carry over "
++        "between calls, so pass cwd and env instead. Stdin is closed unless you pass stdin, so "
++        "interactive prompts fail fast. Multi-line scripts of any length are fine. Long output is "
++        "shortened to its first and last lines; the result then names a handle (out_...) whose "
++        "full output the `output` tool can page or grep. A command still running after wait_s is "
++        "handed back as a background process and keeps running; name a long-lived process (a "
++        "server, a watcher) to make a later call join or restart it instead of starting a copy."
+     )
+     return {
+         "name": "run",
+@@ -91,65 +94,77 @@
+             "properties": {
+                 "command": {
+                     "type": "string",
+-                    "description": "Shell command or multi-line script.",
++                    "description": "Command or multi-line script, in the syntax of the chosen shell.",
+                 },
+                 "shell": {
+                     "type": "string",
+                     "description": (
+-                        f"Shell (default: {default}); choose from "
++                        f"Shell to run in (default: {default}). One of: "
+                         f"{', '.join(services.registry.available_ids()) or 'none'}."
+                     ),
+                 },
+                 "cwd": {
+                     "type": "string",
+-                    "description": f"Working directory (default {services.default_cwd})."
+-                    + (" Windows accepts C:/ and /c/ paths." if services.windows else ""),
++                    "description": f"Working directory (default: {services.default_cwd})."
++                    + (
++                        " Windows, C:/ or /c/ style paths are accepted." if services.windows else ""
++                    ),
+                 },
+                 "timeout_s": {
+                     "type": "number",
+                     "description": (
+-                        "Hard deadline: kills the process tree even after hand-back ("
++                        "Kills the command and everything it started, also after it was handed "
++                        "back ("
+                         + (
+                             f"default {s.default_timeout_s:g}s"
+                             if s.default_timeout_s is not None
+                             else "no default"
+                         )
+-                        + f", max {s.max_timeout_s:g}s). Omit for persistent servers/watchers."
++                        + f", max {s.max_timeout_s:g}s). Omit it for servers and watchers you "
++                        "intend to keep running."
+                     ),
+                 },
+                 "wait_s": {
+                     "type": "number",
+                     "description": (
+-                        f"Wait before returning a running handle (default {s.wait_default_s:g}s, "
+-                        f"max {s.wait_max_s:g}s). The command keeps running; 0 returns immediately."
++                        f"How long to wait for the command to finish before returning a running "
++                        f"result with a handle instead (default {s.wait_default_s:g}, max "
++                        f"{s.wait_max_s:g}); the command keeps running either way. Use 0 to check "
++                        "a fast command without blocking."
+                     ),
+                 },
+                 "wait_for": {
+                     "oneOf": [{"type": "string"}, {"type": "object"}],
+                     "description": (
+-                        "Wait for exit (default), regex:<pattern> in output, port:<n> listening, "
+-                        "or idle:<seconds> without output. Bounded by wait_s."
++                        "Condition to wait for instead of the command finishing: 'exit' "
++                        "(default), 'regex:<pattern>' (a line matches), 'port:<n>' (the "
++                        "command listens on TCP port n) or 'idle:<seconds>' (no output for "
++                        "that long). Bounded by wait_s either way."
+                     ),
+                 },
+                 "name": {
+                     "type": "string",
+                     "description": (
+-                        "Process name. A later run with this name joins it; output and stop also "
+-                        "accept the name."
++                        "Name a long-lived process (a server, watcher) so a later run() with the "
++                        "same name joins it instead of starting a copy, and output()/stop() can "
++                        "address it by name."
+                     ),
+                 },
+                 "restart": {
+                     "type": "boolean",
+-                    "description": "With name: stop its current process and start this command.",
++                    "description": (
++                        "With name: stop the process currently running under that name (if any) "
++                        "and start this command in its place."
++                    ),
+                 },
+                 "stdin": {
+                     "type": "string",
+-                    "description": "Input text, then end-of-file.",
++                    "description": "Text written to the command's standard input, followed by end-of-file.",
+                 },
+                 "env": {
+                     "type": "object",
+                     "additionalProperties": {"type": "string"},
+-                    "description": "Environment variables for this call.",
++                    "description": "Extra environment variables for this call only.",
+                 },
+             },
+             "required": ["command"],
+--- a/envelope/tools/output.py
++++ b/envelope/tools/output.py
+@@ -53,47 +53,50 @@
+         "name": "output",
+         "title": "Read command output",
+         "description": (
+-            "Read saved run output by handle or name, including lines omitted from a shortened "
+-            f"result. No mode returns unread lines (or the last {DEFAULT_TAIL} if none). Choose "
+-            f"one mode: tail, offset+limit (1-based; default limit {DEFAULT_LIMIT}), or regex "
+-            "grep+context. stream selects stdout, stderr or both. wait_s/wait_for can wait before "
+-            "reading. Lines include line numbers."
++            "Read the full, saved output of an earlier `run` shell command by its handle (out_...), "
++            "for example when the terminal output shown in the run result was truncated. With no "
++            "tail/offset/grep argument, returns lines not yet shown by a previous `output` call on "
++            f"this handle (or the last {DEFAULT_TAIL} lines if none were shown yet). Otherwise choose "
++            f"ONE explicit mode: tail (last N lines), offset+limit (1-based line range, limit "
++            f"defaults to {DEFAULT_LIMIT}), or grep (Python regular expression) with optional context "
++            "lines. stream selects stdout, stderr or both (default). Lines are returned with their "
++            "line numbers."
+         ),
+         "inputSchema": {
+             "type": "object",
+             "properties": {
+                 "handle": {
+                     "type": "string",
+-                    "description": "Run handle (out_...) or process name.",
+-                },
+-                "tail": {"type": "integer", "description": "Last N lines."},
+-                "offset": {"type": "integer", "description": "First line (1-based)."},
++                    "description": "Output handle from a run result, e.g. out_91c2ab04.",
++                },
++                "tail": {"type": "integer", "description": "Return the last N lines."},
++                "offset": {"type": "integer", "description": "First line to return (1-based)."},
+                 "limit": {
+                     "type": "integer",
+-                    "description": "Lines from offset.",
++                    "description": "Number of lines to return from offset.",
+                 },
+                 "grep": {
+                     "type": "string",
+-                    "description": "Regex for matching lines.",
++                    "description": "Regular expression; returns matching lines.",
+                 },
+                 "context": {
+                     "type": "integer",
+-                    "description": "Context lines around grep matches.",
++                    "description": "Lines of context around each grep match.",
+                 },
+                 "stream": {
+                     "type": "string",
+                     "enum": ["both", "stdout", "stderr"],
+-                    "description": "Stream (default both).",
++                    "description": "Which stream to read (default both).",
+                 },
+                 "wait_s": {
+                     "type": "number",
+-                    "description": "Seconds to wait before reading; default condition is exit.",
++                    "description": "Wait this long for wait_for (or the process exiting) before reading.",
+                 },
+                 "wait_for": {
+                     "oneOf": [{"type": "string"}, {"type": "object"}],
+                     "description": (
+-                        "Wait condition: exit (default), regex:<pattern>, port:<n>, or "
+-                        "idle:<seconds>."
++                        "Condition to wait for before reading: 'exit' (default), "
++                        "'regex:<pattern>', 'port:<n>' or 'idle:<seconds>'."
+                     ),
+                 },
+             },
+--- a/envelope/tools/stop.py
++++ b/envelope/tools/stop.py
+@@ -25,21 +25,22 @@
+         "name": "stop",
+         "title": "Stop a background process",
+         "description": (
+-            "Stop a background process by run handle or name. Request a graceful stop, then "
+-            "force termination after grace_s. Also accepts an already finished process."
++            "Terminate a background process started by run() (by its out_... handle or name): "
++            "requests a graceful stop, waits grace_s, then forces it. Safe to call on a process "
++            "that has already finished."
+         ),
+         "inputSchema": {
+             "type": "object",
+             "properties": {
+                 "handle": {
+                     "type": "string",
+-                    "description": "Run handle (out_...) or process name.",
++                    "description": "Output handle or name from a run result.",
+                 },
+                 "grace_s": {
+                     "type": "number",
+                     "description": (
+-                        "Grace period before force ("
+-                        f"default {settings.stop_grace_s:g}s, max {settings.stop_grace_max_s:g}s)."
++                        f"Seconds to wait for a graceful exit before forcing it "
++                        f"(default {settings.stop_grace_s:g}, max {settings.stop_grace_max_s:g})."
+                     ),
+                 },
+             },
+--- a/envelope/tools/processes.py
++++ b/envelope/tools/processes.py
+@@ -23,16 +23,17 @@
+         "name": "processes",
+         "title": "List background processes",
+         "description": (
+-            "List background processes from this session, running first. By default include "
+-            "running and finished processes with unseen results; all: true includes every "
+-            f"valid handle. At most {limit} entries."
++            "List background processes started by run() in this session: by default those still "
++            "running and those that finished without their result being read yet; with all: true, "
++            f"every one whose output handle is still valid. Shows at most {limit} entries, running "
++            "first."
+         ),
+         "inputSchema": {
+             "type": "object",
+             "properties": {
+                 "all": {
+                     "type": "boolean",
+-                    "description": "Include already reported processes (default false).",
++                    "description": "Include processes already reported as finished (default: false).",
+                 },
+             },
+         },

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import posixpath
+import re
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from ..runner.trial import UnitResult, Workspace
@@ -68,6 +70,7 @@ class LinuxTrialTarget:
         self.ssh, self.image, self.network, self.python = ssh, image, network, python
         self._staging = f"/home/{ssh.user}/eval-staging"
         self._launcher = f"/home/{ssh.user}/eval-launcher"
+        self._variants: tuple[str, ...] = ()
 
     def _sh(self, command: str, timeout: float = 120) -> tuple[int, bytes, bytes]:
         return self.ssh.run_shell(command, timeout=timeout)
@@ -84,15 +87,23 @@ class LinuxTrialTarget:
 
     # -- once per job ----------------------------------------------------------------------
 
-    def setup(self, envelope_pyz: Path | None = None) -> None:
+    def setup(
+        self, envelope_pyz: Path | None = None, *, variants: Mapping[str, Path] | None = None
+    ) -> None:
         """Create the isolated network (idempotent) and stage the launcher files, and optionally
-        one `envelope.pyz`, on the host, ready to be copied into each trial's container."""
+        envelope builds on the host, ready to be copied into each trial's container."""
         self._sh(f"docker network create --internal {self.network}")  # exit 1 if it exists: fine
         self._must(f"mkdir -p {self._staging} {self._launcher}", "mkdir")
         for name in ("launch.py", "oracle.py"):
             self.ssh.put(LAUNCHER_DIR / name, f"{self._launcher}/{name}")
         if envelope_pyz is not None:
             self.ssh.put(envelope_pyz, f"{self._launcher}/envelope.pyz")
+        self._variants = tuple(sorted(variants or {}))
+        for name in self._variants:
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
+                raise ValueError(f"unsafe envelope variant name {name!r}")
+            assert variants is not None
+            self.ssh.put(variants[name], f"{self._launcher}/envelope-{name}.pyz")
 
     def network_gateway(self) -> str:
         """The trial network's own bridge gateway address (not the default `docker0` bridge's,
@@ -124,6 +135,7 @@ class LinuxTrialTarget:
         rc, _, _ = self._sh(f"test -f {self._launcher}/envelope.pyz")
         if rc == 0:
             staged = (*staged, "envelope.pyz")
+        staged = (*staged, *(f"envelope-{name}.pyz" for name in self._variants))
         for filename in staged:
             self._must(
                 f"docker cp {self._launcher}/{filename} {name}:/home/trial/{filename}",
@@ -183,7 +195,14 @@ class LinuxTrialTarget:
         self._sh(f"rm -rf {staged}")
 
     def run_unit(
-        self, argv: list[str], *, env: dict[str, str], cwd: str, timeout: float, stdout_to: str
+        self,
+        argv: list[str],
+        *,
+        env: dict[str, str],
+        cwd: str,
+        timeout: float,
+        stdout_to: str,
+        stdin_from: str | None = None,
     ) -> UnitResult:
         container, real_cwd = _split(cwd)
         _, real_stdout = _split(stdout_to)
@@ -196,6 +215,8 @@ class LinuxTrialTarget:
             "stdout": real_stdout,
             "result": f"{state}/launch_result.json",
         }
+        if stdin_from is not None:
+            spec["stdin"] = _split(stdin_from)[1]
         with tempfile.TemporaryDirectory() as tmp:
             local = Path(tmp) / "spec.json"
             local.write_text(json.dumps(spec), encoding="utf-8")

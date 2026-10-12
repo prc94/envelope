@@ -27,8 +27,8 @@ kind = "docker"
 host = "192.168.94.41"
 user = "envelope"
 python = "python3"
-key = "/home/prc94/.config/envelope-eval/linux_ed25519"
-known_hosts = "/home/prc94/.config/envelope-eval/linux_known_hosts"
+key = "~/.config/envelope-eval/linux_ed25519"
+known_hosts = "~/.config/envelope-eval/linux_known_hosts"
 image = "envelope-eval-linux:2026-09-29"
 network = "envelope-eval"
 gateway_port = 8787
@@ -49,7 +49,7 @@ launch = ["opencode"]
 [[arms]]
 name = "default"
 kind = "envelope"
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
 
 [[arms]]
 name = "native-qwen"

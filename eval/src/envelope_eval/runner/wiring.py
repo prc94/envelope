@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
@@ -86,6 +87,9 @@ def build_runtime(
     """Connect to every target, verify fingerprints and the model allowlist, build the envelope
     variants, open the tunnels and assemble one executor per (target, harness, arm)."""
     tasks = {t.id: t for t in suite.tasks}
+    # The gateway ledger is persistent and keyed by trial ID. A fresh namespace prevents a
+    # rerun of the same job from reading an earlier run's tool offerings and token usage.
+    run_id = secrets.token_hex(8)
     gateway_cfg = dict(job.extra.get("gateway", {}))
     gateway = (
         client_from_config(str(gateway_cfg["config"]))
@@ -102,10 +106,18 @@ def build_runtime(
     wanted = {arm.variant or DEFAULT_VARIANT for arm in job.arms}
     for name in sorted(wanted):
         patch = None
+        revision = None
         if name != DEFAULT_VARIANT:
-            patch = repo / str(_table(job, "variant", name)["patch"])
+            spec = _table(job, "variant", name)
+            if "patch" in spec:
+                patch = repo / str(spec["patch"])
+            revision = spec.get("revision")
+            if patch is None and revision is None:
+                raise JobConfigError(f"variant {name!r} needs a patch or revision")
         log(f"building envelope variant {name}")
-        built = build_variant(repo, patch, name=name, output=out / "variants" / f"{name}.pyz")
+        built = build_variant(
+            repo, patch, name=name, output=out / "variants" / f"{name}.pyz", revision=revision
+        )
         variants[name] = {"source_hash": built.source_hash, "artifact_hash": built.artifact_hash}
         artifacts[name] = built.artifact
 
@@ -148,7 +160,7 @@ def build_runtime(
             oracle_script=remote["oracle_script"],
             envelope=remote.get(DEFAULT_VARIANT) or next(iter(remote.values())),
             shell=str(cfg.get("shell", default_shell)),
-            job=f"{job.name}-oracle",
+            job=f"{job.name}-oracle-{run_id}",
             db=dbs.get(target_name),
         )
         oracles[target_name] = oracle_runner.check()
@@ -172,6 +184,7 @@ def build_runtime(
                     job=job.name,
                     gateway_url=gateway_url,
                     scratch=scratch / target_name,
+                    run_id=run_id,
                     db=dbs.get(target_name),
                 )
 
@@ -210,6 +223,7 @@ def build_runtime(
             "variants": variants,
             "models": {"checked": list(job.models), "allowed": verdict.get("allowed", [])},
             "built_at": time.time(),
+            "run_id": run_id,
         },
         close=close,
     )
@@ -226,6 +240,7 @@ def _adapter(harness: dict[str, Any], python: str, envelope_pyz: str) -> Adapter
         return OpenCodeAdapter(
             launch=list(harness["launch"]),
             envelope_command=[python, envelope_pyz],
+            model_prompts=dict(harness.get("model_prompts", {})),
         )
     raise JobConfigError(f"harness adapter {kind!r} is not implemented yet")
 
@@ -277,18 +292,11 @@ def _build_linux_target(
 ) -> tuple[
     LinuxTrialTarget, SSHTarget, str, dict[str, str], LinuxTrialTarget, DatabaseAdmin | None
 ]:
-    """A `docker` target: one trial container per trial on a remote Docker host, reached the same
-    way the Windows lane's model gateway is -- a reverse tunnel, but bound to the trial network's
-    own bridge gateway address (task 10.1), since a trial container has no route to the runner
-    host's own loopback. `LinuxTrialTarget` supports only one envelope build at a time (it always
-    copies a fixed `envelope.pyz` into every container, task 13's live verifications never needed
-    more than the default variant): a job with a non-default variant on a docker target is refused
-    rather than silently running the wrong build."""
-    if set(artifacts) - {DEFAULT_VARIANT}:
-        raise JobConfigError(
-            f"target {target_name!r}: docker targets only support the default envelope variant "
-            f"(LinuxTrialTarget copies one fixed envelope.pyz into every trial container)"
-        )
+    """A Docker target with every selected envelope build staged in each trial container.
+
+    The adapter points each arm at its selected build; the gateway tunnel binds to the trial
+    network's bridge gateway because an internal container cannot reach the host loopback.
+    """
     ssh = SSHTarget(
         str(cfg["host"]),
         str(cfg["user"]),
@@ -301,11 +309,16 @@ def _build_linux_target(
     image = str(cfg["image"])
     network = str(cfg.get("network", "envelope-eval"))
     linux = LinuxTrialTarget(ssh, image, network=network, python=ssh.python)
-    linux.setup(envelope_pyz=artifacts.get(DEFAULT_VARIANT))
+    linux.setup(
+        envelope_pyz=artifacts.get(DEFAULT_VARIANT),
+        variants={name: path for name, path in artifacts.items() if name != DEFAULT_VARIANT},
+    )
     remote = {
-        DEFAULT_VARIANT: "/home/trial/envelope.pyz",
-        "oracle_script": "/home/trial/oracle.py",
+        name: f"/home/trial/envelope-{name}.pyz" for name in artifacts if name != DEFAULT_VARIANT
     }
+    if DEFAULT_VARIANT in artifacts:
+        remote[DEFAULT_VARIANT] = "/home/trial/envelope.pyz"
+    remote["oracle_script"] = "/home/trial/oracle.py"
     bridge = linux.network_gateway()
     gateway_port = int(cfg.get("gateway_port", 8787))
     ssh.open_reverse_tunnel(int(cfg.get("gateway_local_port", 8787)), gateway_port, bind=bridge)

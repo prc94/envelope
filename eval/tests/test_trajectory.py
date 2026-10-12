@@ -24,6 +24,19 @@ def test_parse_wrapped_and_truncated(tmp_path: Path):
     assert isinstance(parse_transcript(fixture).events, tuple)
 
 
+def test_plain_text_warning_does_not_hide_later_json_events(tmp_path: Path):
+    path = tmp_path / "warning.jsonl"
+    path.write_text(
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"before"}]}}\n'
+        "strict mode: use allowUnionTypes to allow union type keyword\n"
+        '{"type":"result","subtype":"success","result":"interop-408"}\n',
+        encoding="utf-8",
+    )
+    trajectory = parse_transcript(path)
+    assert trajectory.final_answer == "interop-408"
+    assert trajectory.truncated is False
+
+
 STREAM_JSON = [
     {
         "type": "system",
@@ -96,7 +109,12 @@ def test_stream_json_killed_mid_command_keeps_the_in_flight_call(tmp_path: Path)
     assert trajectory.final_answer == ""
 
 
-ENVELOPE_TOOLS = ["mcp__envelope__run", "mcp__envelope__output"]
+ENVELOPE_TOOLS = [
+    "mcp__envelope__run",
+    "mcp__envelope__output",
+    "mcp__envelope__stop",
+    "mcp__envelope__processes",
+]
 
 
 def test_envelope_arm_command_excludes_every_builtin_except_the_deferral_wrappers(tmp_path):
@@ -122,6 +140,17 @@ def test_native_arm_keeps_only_its_shell_tool(tmp_path):
     assert "run_shell_command" not in excluded and {"tool_search", "tool_call"} <= excluded
     assert adapter.implicit_tools("native") == set()
     assert adapter.visible_tools("native", ["run_shell_command"]) == {"run_shell_command"}
+
+
+def test_native_background_arm_keeps_monitor_and_task_stop(tmp_path):
+    adapter = QwenAdapter()
+    tools = ["run_shell_command", "task_stop", "monitor"]
+    argv = adapter.command("x", tmp_path, "native", tools)
+    excluded = set(argv[argv.index("--exclude-tools") + 1 : argv.index("-p")])
+    assert not set(tools) & excluded
+    assert {"tool_search", "tool_call", "read_file"} <= excluded
+    assert adapter.visible_tools("native", tools) == set(tools)
+    assert adapter.implicit_tools("native") == set()
 
 
 def test_extra_non_shell_tools_are_kept_and_visible(tmp_path):

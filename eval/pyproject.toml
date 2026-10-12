@@ -6,6 +6,7 @@ dependencies = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: runs real shells, processes or harness binaries"]
 
 [tool.ruff]
 target-version = "py312"

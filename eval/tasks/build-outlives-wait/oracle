@@ -1,0 +1,4 @@
+[
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} -u job.py", "wait_s": 0}, "save_as": "build"},
+  {"tool": "output", "arguments": {"handle": "$build", "wait_for": "exit", "wait_s": 120}, "expect_wait": "condition_met", "answer_from": true}
+]

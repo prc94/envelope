@@ -1,0 +1,10 @@
+id = "long-wait"
+version = 2
+category = "background-processes"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["background-processes", "default-wait", "long-running"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = []
+timeout = 700

@@ -103,6 +103,27 @@ def test_integrity_confinement_and_coverage(tmp_path: Path):
 
     suite = load_suite(tmp_path / "no-tasks")
     assert suite.coverage("linux")["canary"] == []
+    assert suite.coverage("linux")["background-processes"] == []
+    assert "background-processes: UNCOVERED" in suite.coverage_report(("linux",))
+
+
+def test_background_claim_and_default_wait_lever(tmp_path: Path):
+    from envelope_eval.tasks import load_suite
+
+    task_dir = tmp_path / "background"
+    _task_dir(task_dir)
+    metadata = task_dir / "task.toml"
+    metadata.write_text(
+        metadata.read_text().replace(
+            'tags=["canary"]', 'tags=["background-processes", "default-wait"]'
+        )
+    )
+    suite = load_suite(tmp_path)
+    (task,) = suite.tasks
+    assert task.claims == {"background-processes"}
+    assert task.levers == {"default-wait"}
+    assert suite.coverage("linux")["background-processes"] == [task.id]
+    assert "background-processes: x" in suite.coverage_report(("linux",))
 
 
 def test_generation_and_judging_keep_bytes(tmp_path: Path):

@@ -394,6 +394,7 @@ def test_gateway_is_not_reachable_on_other_interfaces(rig):
         other = probe.getsockname()[0]
     except OSError:
         pytest.skip("no non-loopback interface")
+        return
     finally:
         probe.close()
     if other.startswith("127."):

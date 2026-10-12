@@ -52,7 +52,7 @@ launch = ['C:\Program Files\nodejs\node.exe', 'C:\Program Files\nodejs\node_modu
 [[arms]]
 name = "default"
 kind = "envelope"
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
 
 [[arms]]
 name = "native"

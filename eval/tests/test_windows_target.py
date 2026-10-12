@@ -87,11 +87,13 @@ def test_run_unit_writes_a_spec_and_reports_the_launchers_result():
         cwd=ws.workspace,
         timeout=90,
         stdout_to=f"{ws.state}\\transcript.jsonl",
+        stdin_from=f"{ws.state}\\instruction.txt",
     )
     assert unit.exit_code == 0 and not unit.timed_out and unit.leftovers == ("4242 sleep.exe",)
     _, dest, data = next(p for p in ssh.puts if p[0] == "spec.json")
     assert dest == f"{ws.state}\\spec.json"
     spec: dict[str, Any] = json.loads(data or b"")
+    assert spec["stdin"] == f"{ws.state}\\instruction.txt"
     assert spec["argv"] == ["qwen", "-p", "hi"] and spec["timeout"] == 90
     assert spec["stdout"].endswith("transcript.jsonl") and spec["env"]["HOME"] == ws.home
     launch = ssh.shell[-1]

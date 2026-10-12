@@ -88,6 +88,7 @@ class UnitTarget(Protocol):
         cwd: str,
         timeout: float,
         stdout_to: str,
+        stdin_from: str | None = None,
     ) -> UnitResult:
         """Run the harness in a containment unit; leftovers are listed and then killed."""
         ...
@@ -109,7 +110,7 @@ def stage(name: str) -> Iterator[None]:
         raise InfraError(f"{name}: {exc}") from exc
 
 
-def trial_id(job: str, trial: Trial) -> str:
+def trial_id(job: str, trial: Trial, run_id: str = "") -> str:
     """A probe (negative index: canary and oracle gates) must be unique per *cell*
     (harness+model), not just per (job, index): `Gates._run_canaries` always probes with index
     -1/-2 regardless of which cell it is checking, and the gateway's ledger is keyed by this id
@@ -117,10 +118,11 @@ def trial_id(job: str, trial: Trial) -> str:
     each other's tool-offering and cost data back -- harmless while every cell expected the same
     tools (a single-harness job), but a real, silent contamination once cells can expect
     different tool sets (multiple harnesses, task 14.1)."""
+    suffix = f"-{run_id}" if run_id else ""
     if trial.index < 0:
         cell = hashlib.sha256(f"{trial.harness}:{trial.model}".encode()).hexdigest()[:8]
-        return f"{job}-c{abs(trial.index):05d}-{cell}"
-    return f"{job}-t{abs(trial.index):05d}"
+        return f"{job}-c{abs(trial.index):05d}-{cell}{suffix}"
+    return f"{job}-t{abs(trial.index):05d}{suffix}"
 
 
 @dataclass
@@ -135,6 +137,7 @@ class TrialExecutor:
     job: str
     gateway_url: str
     scratch: Path
+    run_id: str = ""
     request_cap: int = 200
     auxiliary_models: dict[str, list[str]] = field(default_factory=dict)
     on_stage: Callable[[str, str], None] | None = None
@@ -142,7 +145,7 @@ class TrialExecutor:
 
     def __call__(self, trial: Trial) -> dict[str, Any]:
         task, arm = self.tasks[trial.task], self.arms[trial.arm]
-        tid = trial_id(self.job, trial)
+        tid = trial_id(self.job, trial, self.run_id)
         local = self.scratch / tid
         token: str | None = None
         try:
@@ -246,12 +249,21 @@ class TrialExecutor:
         transcript_remote = ws.state + "/transcript.jsonl"
         with stage("run harness"):
             workdir = self.target.real_path(ws.workspace)
+            input_kwargs: dict[str, str] = {}
+            stdin = getattr(self.adapter, "stdin", None)
+            if stdin is not None:
+                input_path = local / "instruction.txt"
+                input_path.write_bytes(stdin(instruction).encode("utf-8"))
+                input_remote = ws.state + "/instruction.txt"
+                self.target.upload(input_path, input_remote)
+                input_kwargs["stdin_from"] = input_remote
             unit = self.target.run_unit(
                 self.adapter.command(instruction, Path(workdir), arm.kind, list(arm.tool_set)),
                 env=env | self.adapter.environment(trial.model, token, self.gateway_url),
                 cwd=ws.workspace,
                 timeout=task.timeout,
                 stdout_to=transcript_remote,
+                **input_kwargs,
             )
         gateway_state = self._state(token)
         ledger = self.gateway.ledger(tid)
@@ -307,6 +319,8 @@ class TrialExecutor:
             "passed": passed,
             "attribution": attribution,
             "judge": {k: v for k, v in verdict.items() if k != "passed"},
+            # What collect.py saw, so a corrected judge can re-score the trial without a rerun.
+            "observations": observations,
             "integrity": integrity,
             "leftover_processes": list(unit.leftovers),
             "exit_code": unit.exit_code,
@@ -336,21 +350,25 @@ class TrialExecutor:
     def _check_offered_tools(self, ledger: list[dict[str, Any]], arm: Arm) -> None:
         """The harness's own report says what is configured; the gateway saw what the model was
         actually offered. A tool outside the arm's set (a harness update re-enabling one, a
-        background agent with its own tools) makes the trial unscoreable."""
+        background agent with its own tools), or one of the arm's tools never offered, makes the
+        trial unscoreable."""
         allowed = self.adapter.visible_tools(arm.kind, list(arm.tool_set))
         if allowed is None:
             return
-        extra = sorted(
-            {
-                name
-                for row in ledger
-                if row.get("role") == "main"
-                for name in row.get("tool_names", [])
-            }
-            - allowed
-        )
+        offered = {
+            name
+            for row in ledger
+            if row.get("role") == "main"
+            for name in row.get("tool_names", [])
+        }
+        extra = sorted(offered - allowed)
         if extra:
             raise InfraError(f"model was offered tools outside the configured set: {extra}")
+        # The reverse matters as much: a harness that silently drops the arm's tools (an MCP
+        # server it never started) leaves the model with nothing to call.
+        missing = sorted(allowed - offered)
+        if missing:
+            raise InfraError(f"model was never offered configured tools: {missing}")
 
     def _confine(self, ws: Workspace, answer_key: Any) -> None:
         """Fail the attempt if a secret the generator declared (`{"secrets": [...]}` in its
@@ -439,7 +457,9 @@ class TrialExecutor:
         ]
         leftovers = [{"kind": "leftover"} for _ in unit.leftovers]
         return lever_metrics(
-            model_requests + audit_metric_events + leftovers, list(trajectory.events)
+            model_requests + audit_metric_events + leftovers,
+            list(trajectory.events),
+            audit_rows,
         )
 
 

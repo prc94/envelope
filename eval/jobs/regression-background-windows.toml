@@ -1,0 +1,77 @@
+# M2 Windows screening job (task 14.2): a representative slice of the Windows-lane suite (not the
+# full 33 tasks -- a screening job is a cheap sanity check, not a decision job), Qwen Code (the
+# only harness installed on the VM), the three models the provider guardrail allows, the default
+# arm and the native-shell baseline (cmd, spike 1.3), 3 trials per cell. Includes both known-gap
+# tasks so the report's known-gap section is exercised. Database tasks are left out: they need a
+# DatabaseAdmin wired from the runner host into the Windows target's build path, which nothing
+# needs yet (Linux screening handles that lane's database coverage, task 14.1).
+name = "regression-background-windows"
+seed = 20260929
+lanes = ["windows"]
+targets = ["vm"]
+harnesses = ["qwen-code"]
+models = ["deepseek/deepseek-v4-flash-0731", "qwen/qwen3.8-flash", "z-ai/glm-5.3-flash"]
+profile = "decision"
+trials = 3
+wall_clock_cap = 36000
+tasks = [
+    "canary",
+    "interop-basic",
+    "interop-truncation",
+    "interop-long",
+    "git-log-ticket",
+    "files-duplicates",
+    "gitbash-cp866-dir",
+    "git-merge-editor",
+    "applocker-blocked-copy",
+    "stdin-confirm-prompt",
+]
+
+[target.vm]
+kind = "ssh"
+host = "192.168.94.172"
+user = "envelope"
+python = "python"
+tools = ["qwen"]
+shell = "git-bash"
+root = 'C:\eval\p3a-oracle'
+# Windows evaluation licence: installed 2026-09-24, 90 days (docs/windows-test-vm.md).
+expires = 2026-12-23
+gateway_port = 18787
+gateway_local_port = 8787
+[target.vm.fingerprint]
+oemcp = 866
+acp = 1251
+[target.vm.fingerprint.versions]
+qwen = "0.24.5"
+
+[harness.qwen-code]
+adapter = "qwen-code"
+launch = ['C:\Program Files\nodejs\node.exe', 'C:\Program Files\nodejs\node_modules\@qwen-code\qwen-code\cli-entry.js']
+
+[variant.p2]
+revision = "f67014f" # Last P2 commit, before the P3a implementation.
+
+[[arms]]
+name = "p3a"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
+
+[[arms]]
+name = "p2"
+kind = "envelope"
+variant = "p2"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+
+[[decision_rules]]
+name = "p3a-noninferiority"
+arm = "p3a"
+versus = "p2"
+[[decision_rules.conditions]]
+metric = "success"
+kind = "noninferiority"
+margin = 0.05
+[[decision_rules.conditions]]
+metric = "tokens"
+kind = "noninferiority"
+margin = 0.10

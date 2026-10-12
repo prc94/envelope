@@ -1,0 +1,10 @@
+id = "restart-after-edit"
+version = 2
+category = "background-processes"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["background-processes"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = ["config.txt", "hits.log"]
+timeout = 300

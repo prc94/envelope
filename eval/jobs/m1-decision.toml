@@ -46,20 +46,20 @@ patch = "eval/variants/head-half.patch"
 [[arms]]
 name = "default"
 kind = "envelope"
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
 
 [[arms]]
 name = "budget-small"
 kind = "envelope"
 tags = ["output-budget"]
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
 settings = { ENVELOPE_OUTPUT_MAX_CHARS = "6000", ENVELOPE_OUTPUT_MAX_LINES = "200" }
 
 [[arms]]
 name = "budget-large"
 kind = "envelope"
 tags = ["output-budget"]
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
 settings = { ENVELOPE_OUTPUT_MAX_CHARS = "24000", ENVELOPE_OUTPUT_MAX_LINES = "800" }
 
 [[arms]]
@@ -67,7 +67,7 @@ name = "headtail-half"
 kind = "envelope"
 variant = "head-half"
 tags = ["head-tail"]
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
 
 # Adopt a budget when success is not worse than the default by more than five points and the
 # median tokens fall by at least fifteen percent; adopt the head/tail split when success is not

@@ -1,0 +1,7 @@
+[
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} -u watch.py", "wait_s": 0}, "save_as": "watcher"},
+  {"tool": "output", "arguments": {"handle": "$watcher", "wait_for": "regex:RESULT", "wait_s": 10}, "expect_wait": "condition_met"},
+  {"tool": "run", "arguments": {"command": "echo version=2 > source.txt"}, "expect_exit": 0},
+  {"tool": "output", "arguments": {"handle": "$watcher", "wait_for": "regex:<<expect>>", "wait_s": 10}, "expect_wait": "condition_met", "answer_from": true},
+  {"tool": "stop", "arguments": {"handle": "$watcher"}}
+]

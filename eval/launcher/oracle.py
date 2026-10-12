@@ -8,7 +8,7 @@ would.
 
 Starts `python ENVELOPE.pyz` (stdio MCP), calls `run` with the oracle file's contents as the
 command, and writes a transcript in Qwen Code's `stream-json` shape on stdout: an init event
-listing the two tools, the tool call, its result, and the result text as the final answer. The
+listing the four tools, the tool call, its result, and the result text as the final answer. The
 rest of the pipeline (parser, tool-set check, collect, judge, integrity, audit log) then runs
 unchanged, so the oracle exercises the same path a model trial does.
 
@@ -25,7 +25,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-TOOLS = ["mcp__envelope__run", "mcp__envelope__output"]
+TOOLS = [
+    "mcp__envelope__run",
+    "mcp__envelope__output",
+    "mcp__envelope__stop",
+    "mcp__envelope__processes",
+]
 
 
 def emit(event: dict[str, Any]) -> None:
@@ -91,8 +96,10 @@ def code_block(instruction: str) -> str:
 
 def load_steps(text: str, instruction: str) -> list[dict[str, Any]]:
     """An oracle is a plain command (run as is), or a JSON list of steps
-    `{"tool": "run"|"output", "arguments": {...}}`. `{{CODE}}` stands for the instruction's first
-    code block and `$handle` for the output handle of the previous step."""
+    `{"tool": "run"|"output"|"stop"|"processes", "arguments": {...}}`.
+    `{{CODE}}` stands for the instruction's first code block; `$handle` is the most recent
+    output handle, and `save_as` gives a step's handle a reusable `$name`. A step with
+    `answer_from: true` supplies the oracle's final answer even if later steps clean up."""
     try:
         parsed = json.loads(text)
     except ValueError:
@@ -103,7 +110,30 @@ def load_steps(text: str, instruction: str) -> list[dict[str, Any]]:
     if "{{CODE}}" in text:
         code = code_block(instruction)
         steps = json.loads(json.dumps(steps).replace("{{CODE}}", json.dumps(code)[1:-1]))
+    if not isinstance(steps, list) or not steps:
+        raise RuntimeError("oracle must contain at least one step")
+    for number, step in enumerate(steps, 1):
+        if not isinstance(step, dict) or step.get("tool") not in TOOLS_BY_NAME:
+            raise RuntimeError(f"oracle step {number} must name one of {sorted(TOOLS_BY_NAME)}")
+        if not isinstance(step.get("arguments"), dict):
+            raise TypeError(f"oracle step {number} must have an arguments object")
     return steps
+
+
+TOOLS_BY_NAME = {name.removeprefix("mcp__envelope__") for name in TOOLS}
+
+
+def resolve_handles(arguments: dict[str, Any], handles: dict[str, str]) -> dict[str, Any]:
+    """Resolve only whole-string handle placeholders, preserving argument types."""
+    result: dict[str, Any] = {}
+    for key, value in arguments.items():
+        if isinstance(value, str) and value in handles:
+            result[key] = handles[value]
+        elif key == "handle" and isinstance(value, str) and value.startswith("$"):
+            raise RuntimeError(f"oracle uses unknown handle placeholder {value}")
+        else:
+            result[key] = value
+    return result
 
 
 def main(argv: list[str]) -> int:
@@ -118,7 +148,11 @@ def main(argv: list[str]) -> int:
     if bool(args.oracle) == bool(args.oracle_in_home):
         parser.error("give exactly one of --oracle and --oracle-in-home")
     oracle = Path(args.oracle) if args.oracle else Path.home() / args.oracle_in_home
-    steps = load_steps(oracle.read_text(encoding="utf-8"), args.instruction)
+    python_command = "python3" if args.shell == "bash" else "python"
+    steps = load_steps(
+        oracle.read_text(encoding="utf-8").replace("{{PYTHON}}", python_command),
+        args.instruction,
+    )
 
     server = Server(args.envelope)
     try:
@@ -133,18 +167,20 @@ def main(argv: list[str]) -> int:
         server.notify("notifications/initialized")
         names = {t["name"] for t in server.call("tools/list")["tools"]}
         emit({"type": "system", "subtype": "init", "tools": TOOLS, "mcp_servers": []})
-        if not {"run", "output"} <= names:
-            raise RuntimeError(f"envelope exposes {sorted(names)}, expected run and output")
-        handle, text = None, ""
+        if names != TOOLS_BY_NAME:
+            raise RuntimeError(
+                f"envelope exposes {sorted(names)}, expected {sorted(TOOLS_BY_NAME)}"
+            )
+        handles: dict[str, str] = {}
+        text = ""
+        answer_text: str | None = None
         for number, step in enumerate(steps, 1):
-            arguments = dict(step["arguments"])
+            arguments = resolve_handles(step["arguments"], handles)
             if step["tool"] == "run":
                 if args.shell:
                     arguments.setdefault("shell", args.shell)
                 if args.cwd:
                     arguments.setdefault("cwd", args.cwd)
-            elif "handle" in arguments:
-                arguments["handle"] = str(arguments["handle"]).replace("$handle", str(handle))
             call_id = f"oracle_{number}"
             emit(
                 {
@@ -164,7 +200,27 @@ def main(argv: list[str]) -> int:
             )
             result = server.call("tools/call", {"name": step["tool"], "arguments": arguments})
             text = "\n".join(c.get("text", "") for c in result.get("content", []))
-            handle = (result.get("structuredContent") or {}).get("handle", handle)
+            if result.get("isError"):
+                raise RuntimeError(f"oracle step {number} ({step['tool']}) failed: {text}")
+            metadata = result.get("structuredContent") or {}
+            if "expect_exit" in step and metadata.get("exit_code") != step["expect_exit"]:
+                raise RuntimeError(
+                    f"oracle step {number} expected exit {step['expect_exit']}: {text}"
+                )
+            if "expect_wait" in step and metadata.get("wait_outcome") != step["expect_wait"]:
+                raise RuntimeError(
+                    f"oracle step {number} expected wait {step['expect_wait']}: {text}"
+                )
+            handle = metadata.get("handle")
+            if isinstance(handle, str):
+                handles["$handle"] = handle
+                if "save_as" in step:
+                    save_as = step["save_as"]
+                    if not isinstance(save_as, str) or not save_as.isidentifier():
+                        raise RuntimeError(f"oracle step {number} has invalid save_as")
+                    handles[f"${save_as}"] = handle
+            elif "save_as" in step:
+                raise RuntimeError(f"oracle step {number} returned no handle to save")
             emit(
                 {
                     "type": "user",
@@ -181,7 +237,10 @@ def main(argv: list[str]) -> int:
                     },
                 }
             )
+            if step.get("answer_from") is True:
+                answer_text = text
         # A model's answer never contains envelope's `exit N | 1.2s | shell | cwd ...` header.
+        text = answer_text if answer_text is not None else text
         body = text.split("\n", 1)[1] if text.startswith("exit ") and "\n" in text else text
         answer = body.strip()
         emit(

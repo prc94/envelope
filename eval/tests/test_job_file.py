@@ -90,3 +90,41 @@ def test_a_job_refuses_to_start_near_the_end_of_the_evaluation_licence():
     check_licence("vm", {"expires": "2026-12-23"}, today=date(2026, 9, 26))  # a string works too
     extra: Any = load_job(JOB).extra
     assert str(extra["target"]["vm"]["expires"]) == "2026-12-23"
+
+
+def test_background_gate_and_screening_jobs_plan_the_declared_arms():
+    tags = {task.id: set(task.tags) for task in SUITE.tasks}
+    eligible = {task.id: task.baseline_eligible for task in SUITE.tasks}
+    for lane in ("linux", "windows"):
+        existing = load_job(ROOT / "eval/jobs" / f"screening-{lane}.toml")
+        gate = load_job(ROOT / "eval/jobs" / f"regression-background-{lane}.toml")
+        assert gate.profile == "decision" and gate.tasks == existing.tasks
+        if lane == "windows":
+            assert gate.extra["target"]["vm"]["root"] == "C:\\eval\\p3a-oracle"
+        assert gate.extra["variant"]["p2"]["revision"] == "f67014f"
+        assert {arm.name for arm in gate.arms} == {"p2", "p3a"}
+        conditions: Any = gate.decision_rules[0]["conditions"]
+        assert {c["metric"]: c["margin"] for c in conditions} == {
+            "success": 0.05,
+            "tokens": 0.10,
+        }
+        gate_plan = plan_trials(gate, tags, eligible)
+        assert {trial.arm for trial in gate_plan} == {"p2", "p3a"}
+        background = load_job(ROOT / "eval/jobs" / f"screening-background-{lane}.toml")
+        selected = expand_tasks(background.tasks, SUITE, background.lanes)
+        assert len(selected) == 7 and background.trials == 3
+        background = dataclasses.replace(background, tasks=selected)
+        plan = plan_trials(background, tags, eligible)
+        assert {trial.task for trial in plan} == set(selected)
+        assert {trial.task for trial in plan if trial.arm == "wait-10s"} == {
+            task.id for task in SUITE.tasks if "default-wait" in task.tags
+        }
+        native = {arm.name: arm for arm in background.arms if arm.kind == "native"}
+        assert native["native-qwen"].tool_set == (
+            "run_shell_command",
+            "task_stop",
+            "monitor",
+        )
+        if lane == "linux":
+            assert native["native-opencode"].tool_set == ("bash",)
+            assert {trial.harness for trial in plan} == {"qwen-code", "opencode"}

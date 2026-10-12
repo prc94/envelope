@@ -104,7 +104,14 @@ class WindowsTrialTarget:
         self.ssh.get(remote, local)
 
     def run_unit(
-        self, argv: list[str], *, env: dict[str, str], cwd: str, timeout: float, stdout_to: str
+        self,
+        argv: list[str],
+        *,
+        env: dict[str, str],
+        cwd: str,
+        timeout: float,
+        stdout_to: str,
+        stdin_from: str | None = None,
     ) -> UnitResult:
         state = ntpath.dirname(stdout_to)
         self.mkdir(env["APPDATA"], env["LOCALAPPDATA"])  # programs expect these to exist
@@ -117,6 +124,8 @@ class WindowsTrialTarget:
             "stdout": stdout_to,
             "result": result_path,
         }
+        if stdin_from is not None:
+            spec["stdin"] = stdin_from
         with tempfile.TemporaryDirectory() as tmp:
             local = Path(tmp) / "spec.json"
             local.write_text(json.dumps(spec), encoding="utf-8")

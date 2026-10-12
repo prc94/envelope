@@ -1,0 +1,56 @@
+# Rerun of the four background tasks whose judges changed on 2026-10-09 (envelope-only
+# evidence dropped from `port-in-use`, `restart-after-edit` and `watch-rebuild`; `stop-cleanup`
+# made envelope-only), default and native arms only, so their native baselines become comparable.
+name = "rejudge-background-linux"
+seed = 20260929
+lanes = ["linux"]
+targets = ["linux"]
+harnesses = ["qwen-code", "opencode"]
+models = ["deepseek/deepseek-v4-flash-0731", "qwen/qwen3.8-flash", "z-ai/glm-5.3-flash"]
+profile = "screening"
+trials = 3
+wall_clock_cap = 28800
+tasks = ["port-in-use", "restart-after-edit", "watch-rebuild", "stop-cleanup"]
+
+[target.linux]
+kind = "docker"
+host = "192.168.94.41"
+user = "envelope"
+python = "python3"
+key = "~/.config/envelope-eval/linux_ed25519"
+known_hosts = "~/.config/envelope-eval/linux_known_hosts"
+image = "envelope-eval-linux:2026-09-29"
+network = "envelope-eval"
+gateway_port = 8787
+gateway_local_port = 8787
+databases = true
+[target.linux.fingerprint]
+image_digest = "sha256:d672194e49d9bab3656067d41c9c19e76d12b4e258ba5646162f6876e1e87436"
+docker_version = "26.1.5+dfsg1"
+
+[harness.qwen-code]
+adapter = "qwen-code"
+launch = ["qwen"]
+
+[harness.opencode]
+adapter = "opencode"
+launch = ["opencode"]
+
+[[arms]]
+name = "default"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
+
+[[arms]]
+name = "native-qwen"
+kind = "native"
+tool_set = ["run_shell_command", "task_stop", "monitor"]
+
+[[arms]]
+name = "native-opencode"
+kind = "native"
+tool_set = ["bash"]
+
+[support.arms]
+native-qwen = ["qwen-code"]
+native-opencode = ["opencode"]

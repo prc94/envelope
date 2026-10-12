@@ -1,0 +1,10 @@
+id = "watch-rebuild"
+version = 2
+category = "background-processes"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["background-processes"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = ["source.txt"]
+timeout = 300

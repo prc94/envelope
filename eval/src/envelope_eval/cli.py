@@ -51,6 +51,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_coverage(args: argparse.Namespace) -> int:
+    suite = load_suite(args.tasks)
+    if suite.errors:
+        raise SystemExit("task suite errors:\n  " + "\n  ".join(suite.errors))
+    print(suite.coverage_report())
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     job, suite = _load(args.job, args.tasks)
     plan = _plan(job, suite)
@@ -104,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     plan = sub.add_parser("plan", help="show what a job would run")
     plan.add_argument("job")
     plan.set_defaults(func=cmd_plan)
+    coverage = sub.add_parser("coverage", help="show required task areas by lane")
+    coverage.set_defaults(func=cmd_coverage)
     run = sub.add_parser("run", help="run a job")
     run.add_argument("job")
     run.add_argument("--out")

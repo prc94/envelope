@@ -3,9 +3,10 @@
 import json
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
-from test_trial_lifecycle import CANARY, TOOLS, FakeTarget, UnitResult, transcript
+from test_trial_lifecycle import CANARY, FakeTarget, UnitResult, transcript
 
 from envelope_eval.runner.oracle import OracleRunner
 from envelope_eval.runner.planner import Trial
@@ -46,6 +47,103 @@ def test_a_json_oracle_lists_steps_and_keeps_the_handle_placeholder():
     )
     run, output = launcher_oracle.load_steps(text, INSTRUCTION)
     assert "TOKEN=" in run["arguments"]["command"] and output["arguments"]["handle"] == "$handle"
+
+
+def test_multi_call_oracle_preserves_server_handle_and_probe_answer(tmp_path, monkeypatch):
+    script = tmp_path / "oracle.json"
+    script.write_text(
+        json.dumps(
+            [
+                {"tool": "run", "arguments": {"command": "serve"}, "save_as": "server"},
+                {"tool": "output", "arguments": {"handle": "$server", "wait_for": "regex:ready"}},
+                {"tool": "run", "arguments": {"command": "probe"}, "answer_from": True},
+                {"tool": "stop", "arguments": {"handle": "$server"}},
+            ]
+        )
+    )
+
+    class FakeServer:
+        calls: ClassVar[list[tuple[str, dict]]] = []
+
+        def __init__(self, _pyz):
+            pass
+
+        def call(self, method, params=None):
+            if method == "initialize":
+                return {}
+            if method == "tools/list":
+                return {"tools": [{"name": name} for name in launcher_oracle.TOOLS_BY_NAME]}
+            assert method == "tools/call"
+            assert params is not None
+            self.calls.append((params["name"], params["arguments"]))
+            name = params["name"]
+            if name == "run":
+                handle = "out_server" if params["arguments"]["command"] == "serve" else "out_probe"
+                return {
+                    "content": [{"text": "exit 0 | bash\nTOKEN=42"}],
+                    "structuredContent": {"handle": handle},
+                }
+            return {"content": [{"text": "done"}], "structuredContent": {}}
+
+        def notify(self, _method):
+            pass
+
+        def close(self):
+            pass
+
+    events = []
+    monkeypatch.setattr(launcher_oracle, "Server", FakeServer)
+    monkeypatch.setattr(launcher_oracle, "emit", events.append)
+    assert launcher_oracle.main(["--envelope", "unused", "--oracle", str(script)]) == 0
+    assert [name for name, _ in FakeServer.calls] == ["run", "output", "run", "stop"]
+    assert FakeServer.calls[1][1]["handle"] == FakeServer.calls[3][1]["handle"] == "out_server"
+    assert events[-1]["result"] == "TOKEN=42"
+
+
+@pytest.mark.skipif(not (Path("dist") / "envelope.pyz").exists(), reason="needs dist/envelope.pyz")
+def test_dev_server_probe_oracle_on_linux(tmp_path):
+    import importlib.util
+    import os
+    import subprocess
+
+    from envelope_eval.tasks.execution import render_instruction
+
+    root = Path("eval/tasks/dev-server-probe").resolve()
+    spec = importlib.util.spec_from_file_location("dev_server_generator", root / "generate.py")
+    assert spec is not None and spec.loader is not None
+    generator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(generator)
+    answer_key = generator.generate(str(tmp_path), 1)
+    oracle = tmp_path / "oracle.json"
+    oracle.write_text(render_instruction((root / "oracle").read_text(), answer_key))
+    env = {
+        **os.environ,
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(launcher_oracle.__file__)),
+            "--envelope",
+            str(Path("dist/envelope.pyz").resolve()),
+            "--oracle",
+            str(oracle),
+            "--shell",
+            "bash",
+            "--cwd",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    value = (tmp_path / "hits.log").read_text().split()[-1]
+    assert json.loads(result.stdout.splitlines()[-1])["result"] == value
 
 
 @pytest.mark.skipif(not (Path("dist") / "envelope.pyz").exists(), reason="needs dist/envelope.pyz")
@@ -98,6 +196,8 @@ def test_the_oracle_runner_drives_a_real_envelope_and_the_transcript_parses(tmp_
     assert QwenAdapter().exposed_tools(trajectory) == {
         "mcp__envelope__run",
         "mcp__envelope__output",
+        "mcp__envelope__stop",
+        "mcp__envelope__processes",
     }
 
 
@@ -107,7 +207,7 @@ def qwen_shaped_harness(answer):
     def harness(target, ws, stdout_to):
         transcript(
             stdout_to,
-            {"type": "system", "subtype": "init", "tools": list(TOOLS)},
+            {"type": "system", "subtype": "init", "tools": launcher_oracle.TOOLS},
             {
                 "type": "assistant",
                 "message": {"role": "assistant", "content": [{"type": "text", "text": answer}]},

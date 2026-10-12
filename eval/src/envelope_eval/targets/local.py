@@ -65,7 +65,14 @@ class LocalTrialTarget:
             shutil.copyfile(source, local)
 
     def run_unit(
-        self, argv: list[str], *, env: dict[str, str], cwd: str, timeout: float, stdout_to: str
+        self,
+        argv: list[str],
+        *,
+        env: dict[str, str],
+        cwd: str,
+        timeout: float,
+        stdout_to: str,
+        stdin_from: str | None = None,
     ) -> UnitResult:
         state = Path(stdout_to).parent
         spec = {
@@ -76,6 +83,8 @@ class LocalTrialTarget:
             "stdout": stdout_to,
             "result": str(state / "launch_result.json"),
         }
+        if stdin_from is not None:
+            spec["stdin"] = stdin_from
         (state / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
         proc = subprocess.run(
             [self.python, str(LAUNCHER), str(state / "spec.json")],

@@ -1,0 +1,5 @@
+[
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} -u job.py", "wait_s": 0}, "save_as": "job"},
+  {"tool": "output", "arguments": {"handle": "$job", "wait_for": "exit", "wait_s": 120}, "expect_wait": "wait_expired"},
+  {"tool": "output", "arguments": {"handle": "$job", "wait_for": "exit", "wait_s": 300}, "expect_wait": "condition_met", "answer_from": true}
+]

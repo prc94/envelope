@@ -51,6 +51,27 @@ DHCP; pin the lease if the name `envelope-gateway.lab.lan` does not resolve.
 The key also remains in the Qwen settings file; rotate it or remove it there once the
 gateway works (design E15).
 
+## Mercury-hosted background evaluation
+
+The P3a four-job sequence runs inside this LXC as a transient systemd service,
+`envelope-background-evals.service`, under `gw-runner`. Its source and results are in
+`/home/gw-runner/envelope`; the launcher is `scripts/run_background_evals.sh` and the status
+file is `eval/results/background-gates-mercury-20261003/status.tsv`. Check the service with
+`pct exec 114 -- systemctl status envelope-background-evals --no-pager` on Mercury. The job
+script runs Linux regression, Windows regression, Linux background screening, then Windows
+background screening, and continues to the next job even when one exits with a failed gate.
+
+The runner uses `/run/envelope-gateway/admin.sock` directly. Its `gw-runner` account can use
+that socket but cannot read `/etc/envelope-gateway/openrouter.key`. A target SSH key was
+generated inside the LXC at `/home/gw-runner/.ssh/id_ed25519`, and only its public key was
+added to the Linux and Windows eval accounts. The PC's main SSH private key was never copied.
+The runner's database admin configuration is mode `0600` in
+`/home/gw-runner/.config/envelope-eval/databases.toml`.
+
+The service remains active when the PC is off. It is transient: if the LXC or Mercury reboots,
+inspect the saved results before starting a new sequence; the runner does not resume a partially
+completed job automatically.
+
 ## App attribution
 
 OpenRouter's app column and rankings come from request headers, and the gateway builds the upstream request itself, so headers a

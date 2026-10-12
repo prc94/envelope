@@ -1,0 +1,45 @@
+# Rerun of the four background tasks whose judges changed on 2026-10-09 (envelope-only
+# evidence dropped from `port-in-use`, `restart-after-edit` and `watch-rebuild`; `stop-cleanup`
+# made envelope-only), default and native arms only, so their native baselines become comparable.
+name = "rejudge-background-windows"
+seed = 20260929
+lanes = ["windows"]
+targets = ["vm"]
+harnesses = ["qwen-code"]
+models = ["deepseek/deepseek-v4-flash-0731", "qwen/qwen3.8-flash", "z-ai/glm-5.3-flash"]
+profile = "screening"
+trials = 3
+wall_clock_cap = 36000
+tasks = ["port-in-use", "restart-after-edit", "watch-rebuild", "stop-cleanup"]
+
+[target.vm]
+kind = "ssh"
+host = "192.168.94.172"
+user = "envelope"
+python = "python"
+tools = ["qwen"]
+shell = "git-bash"
+root = 'C:\eval\p3a-oracle'
+# Windows evaluation licence: installed 2026-09-24, 90 days (docs/windows-test-vm.md).
+expires = 2026-12-23
+gateway_port = 18787
+gateway_local_port = 8787
+[target.vm.fingerprint]
+oemcp = 866
+acp = 1251
+[target.vm.fingerprint.versions]
+qwen = "0.24.5"
+
+[harness.qwen-code]
+adapter = "qwen-code"
+launch = ['C:\Program Files\nodejs\node.exe', 'C:\Program Files\nodejs\node_modules\@qwen-code\qwen-code\cli-entry.js']
+
+[[arms]]
+name = "default"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
+
+[[arms]]
+name = "native-qwen"
+kind = "native"
+tool_set = ["run_shell_command", "task_stop", "monitor"]

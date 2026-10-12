@@ -13,7 +13,12 @@ from .databases import DatabaseAdmin
 from .planner import Arm, Trial
 from .trial import TrialExecutor, UnitTarget
 
-ENVELOPE_TOOLS = ("mcp__envelope__run", "mcp__envelope__output")
+ENVELOPE_TOOLS = (
+    "mcp__envelope__run",
+    "mcp__envelope__output",
+    "mcp__envelope__stop",
+    "mcp__envelope__processes",
+)
 
 
 class NullGateway:

@@ -68,7 +68,9 @@ class SSHTarget:
     ) -> None:
         self.host, self.user, self.port, self.windows = host, user, port, windows
         self.python, self.tools = python, tools
-        self.key, self.known_hosts, self.connect_timeout = key, known_hosts, connect_timeout
+        self.key = Path(key).expanduser() if key else None
+        self.known_hosts = Path(known_hosts).expanduser() if known_hosts else None
+        self.connect_timeout = connect_timeout
         self._tunnels: list[Tunnel] = []
         # Seams for tests; production uses the real thing.
         self._run: Any = subprocess.run
@@ -163,7 +165,11 @@ class SSHTarget:
             raise RuntimeError(f"download of {source} failed ({rc}): {_text(err)}")
         destination.mkdir(parents=True, exist_ok=True)
         with tarfile.open(fileobj=io.BytesIO(out), mode="r") as archive:
-            archive.extractall(destination, filter="data")
+            # Windows device names (notably NUL) can appear in a workspace tar as character
+            # devices. They are not workspace files; the data filter still protects every
+            # extracted member from links or paths outside the destination.
+            members = (member for member in archive if not (self.windows and member.isdev()))
+            archive.extractall(destination, members=members, filter="data")
 
     def _is_tree(self, remote: str) -> bool:
         rc, out, _ = self.run([self.python, "-c", KIND, remote], timeout=60)

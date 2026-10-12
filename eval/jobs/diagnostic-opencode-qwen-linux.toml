@@ -1,0 +1,62 @@
+# Diagnostic (2026-10-09) for the Linux gate's only loss: OpenCode with qwen3.8-flash on P3a
+# sometimes answers "Ready. What would you like me to do?" without a tool call (18/27 against 27/27
+# for P2). Arms isolate one factor each: tool count (`p3a-2tools`), description wording
+# (`p3a-verbose`, the pre-2026-10-04 descriptions), and P2 as control. Screening profile: exploratory.
+name = "diagnostic-opencode-qwen-linux"
+seed = 20260929
+lanes = ["linux"]
+targets = ["linux"]
+harnesses = ["opencode"]
+models = ["qwen/qwen3.8-flash"]
+profile = "screening"
+trials = 6
+wall_clock_cap = 28800
+tasks = ["canary", "interop-basic", "interop-long", "interop-truncation", "git-log-ticket"]
+
+[target.linux]
+kind = "docker"
+host = "192.168.94.41"
+user = "envelope"
+python = "python3"
+key = "~/.config/envelope-eval/linux_ed25519"
+known_hosts = "~/.config/envelope-eval/linux_known_hosts"
+image = "envelope-eval-linux:2026-09-29"
+network = "envelope-eval"
+gateway_port = 8787
+gateway_local_port = 8787
+databases = true
+[target.linux.fingerprint]
+image_digest = "sha256:d672194e49d9bab3656067d41c9c19e76d12b4e258ba5646162f6876e1e87436"
+docker_version = "26.1.5+dfsg1"
+
+[harness.opencode]
+adapter = "opencode"
+launch = ["opencode"]
+
+[variant.p2]
+revision = "f67014f" # Last P2 commit, before the P3a implementation.
+
+[variant.p3a-verbose]
+patch = "eval/variants/p3a-verbose-schema.patch"
+
+[[arms]]
+name = "p3a"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
+
+[[arms]]
+name = "p3a-2tools"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+
+[[arms]]
+name = "p3a-verbose"
+kind = "envelope"
+variant = "p3a-verbose"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
+
+[[arms]]
+name = "p2"
+kind = "envelope"
+variant = "p2"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]

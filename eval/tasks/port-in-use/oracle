@@ -1,0 +1,6 @@
+[
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} -u owner.py", "name": "owner", "wait_for": "port:<<port>>", "wait_s": 10}},
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} contender.py"}, "expect_exit": 1},
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:<<port>>/identity', timeout=5).read().decode())\""}, "expect_exit": 0, "answer_from": true},
+  {"tool": "stop", "arguments": {"handle": "owner"}}
+]

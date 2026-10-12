@@ -35,3 +35,16 @@ def test_a_relative_output_path_and_the_shipped_head_half_patch(tmp_path: Path, 
     default = build_variant(repo, None, name="default", output=Path("rel/default.pyz"))
     assert default.artifact.exists() and default.artifact_hash != result.artifact_hash
     assert default.source_hash != result.source_hash  # the patch changed the source
+
+
+def test_pinned_p2_revision_builds_an_isolated_artifact(tmp_path: Path):
+    repo = Path(__file__).parents[2]
+    baseline = build_variant(
+        repo,
+        name="p2",
+        revision="f67014f",
+        output=tmp_path / "p2.pyz",
+    )
+    assert baseline.artifact.exists() and len(baseline.artifact_hash) == 64
+    current = build_variant(repo, name="p3a", output=tmp_path / "p3a.pyz")
+    assert baseline.source_hash != current.source_hash

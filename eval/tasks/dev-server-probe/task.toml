@@ -1,0 +1,10 @@
+id = "dev-server-probe"
+version = 1
+category = "background-processes"
+lanes = ["linux", "windows"]
+shells = ["bash", "git-bash"]
+tags = ["background-processes", "default-wait"]
+baseline_eligible = true
+known_gaps = []
+modifiable_paths = ["hits.log"]
+timeout = 300

@@ -184,10 +184,11 @@ if sys.platform == "win32":
             cwd: str,
             stdout: IO[bytes],
             stderr: IO[bytes],
+            stdin: IO[bytes] | int = subprocess.DEVNULL,
         ) -> subprocess.Popen[bytes]:
             proc = subprocess.Popen(
                 argv,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
                 cwd=cwd,
@@ -239,10 +240,11 @@ else:
             cwd: str,
             stdout: IO[bytes],
             stderr: IO[bytes],
+            stdin: IO[bytes] | int = subprocess.DEVNULL,
         ) -> subprocess.Popen[bytes]:
             proc = subprocess.Popen(
                 argv,
-                stdin=subprocess.DEVNULL,
+                stdin=stdin,
                 stdout=stdout,
                 stderr=stderr,
                 cwd=cwd,
@@ -321,12 +323,12 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
     argv[0] = shutil.which(argv[0], path=env.get("PATH")) or argv[0]  # PATHEXT: qwen -> qwen.CMD
     unit = Unit()
     try:
-        with open(spec["stdout"], "wb") as out:
+        with open(spec.get("stdin") or os.devnull, "rb") as inp, open(spec["stdout"], "wb") as out:
             if spec.get("stderr"):
                 with open(spec["stderr"], "wb") as err:
-                    proc = unit.start(argv, env, spec["cwd"], out, err)
+                    proc = unit.start(argv, env, spec["cwd"], out, err, inp)
             else:
-                proc = unit.start(argv, env, spec["cwd"], out, out)
+                proc = unit.start(argv, env, spec["cwd"], out, out, inp)
         try:
             result["exit_code"] = proc.wait(timeout=spec["timeout"])
             result["leftovers"] = find_leftovers(unit, proc.pid)

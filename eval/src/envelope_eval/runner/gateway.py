@@ -121,6 +121,8 @@ DEFAULT_CONFIG = Path.home() / ".config" / "envelope-eval" / "gateway.toml"
 def client_from_config(path: str | Path = DEFAULT_CONFIG) -> GatewayClient:
     """Client for the gateway described by the file the deployment script writes."""
     data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
+    if "socket" in data:
+        return GatewayClient.unix(data["socket"])
     return GatewayClient(
         ssh_transport(data["host"], data["user"], data["key"], data["known_hosts"])
     )

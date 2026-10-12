@@ -118,6 +118,16 @@ def test_client_from_config_builds_a_pinned_ssh_relay(tmp_path):
     assert "IdentitiesOnly=yes" in argv and "-i" in argv and "/k" in argv
 
 
+def test_client_from_config_uses_local_socket_on_gateway_host(tmp_path):
+    from envelope_eval.runner.gateway import UnixTransport, client_from_config
+
+    config = tmp_path / "gateway.toml"
+    config.write_text('socket = "/run/envelope-gateway/admin.sock"\n')
+    transport = client_from_config(config).transport
+    assert isinstance(transport, UnixTransport)
+    assert transport.path == "/run/envelope-gateway/admin.sock"
+
+
 def test_client_reports_blocked_models_and_lists_the_catalog(admin):
     rig, path = admin()
     rig.upstream.models = ["ok/model"]

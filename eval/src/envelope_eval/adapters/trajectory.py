@@ -102,8 +102,11 @@ def parse_transcript(path: str | Path) -> Trajectory:
             try:
                 raw.append(json.loads(line))
             except json.JSONDecodeError:
-                truncated = True
-                break
+                # Some harnesses write schema warnings to stdout between valid JSONL events.
+                # A partial JSON event still means the stream was cut off.
+                if line.lstrip().startswith(("{", "[")):
+                    truncated = True
+                    break
     events = tuple(event for item in raw for event in _expand(item))
     final = ""
     for event in reversed(events):

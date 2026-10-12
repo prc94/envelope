@@ -39,16 +39,16 @@ patch = "eval/variants/head-half.patch"
 [[arms]]
 name = "default"
 kind = "envelope"
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
 
 [[arms]]
 name = "budget-small"
 kind = "envelope"
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
 settings = { ENVELOPE_OUTPUT_MAX_CHARS = "6000", ENVELOPE_OUTPUT_MAX_LINES = "200" }
 
 [[arms]]
 name = "headtail-half"
 kind = "envelope"
 variant = "head-half"
-tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]

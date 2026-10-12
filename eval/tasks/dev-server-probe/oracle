@@ -1,0 +1,6 @@
+[
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} -u server.py", "name": "dev-server", "wait_s": 0}, "save_as": "server"},
+  {"tool": "output", "arguments": {"handle": "$server", "wait_for": "regex:READY", "wait_s": 10}, "expect_wait": "condition_met"},
+  {"tool": "run", "arguments": {"command": "{{PYTHON}} -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:<<port>>/value', timeout=5).read().decode())\""}, "answer_from": true, "expect_exit": 0},
+  {"tool": "stop", "arguments": {"handle": "$server"}}
+]

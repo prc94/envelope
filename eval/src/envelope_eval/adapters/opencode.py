@@ -10,8 +10,7 @@ switched off.
 Unlike Qwen Code, OpenCode reports no tool list at start-up, so the tool-set check rests on the tool
 names the gateway saw in each request (`reports_tools = False`).
 
-The config schema follows OpenCode's documentation; it has not been exercised against a real OpenCode
-yet (task 10.3's live verification needs the Linux image).
+The config and request transport are exercised against the real OpenCode binary on the Linux lane.
 """
 
 from __future__ import annotations
@@ -42,6 +41,15 @@ BUILTIN_TOOLS = (
     "lsp",
 )
 MCP_SERVER = "envelope"
+CANONICAL_PREFIX = f"mcp__{MCP_SERVER}__"  # how job files name envelope's tools
+ENVELOPE_TOOLS = ("run", "output", "stop", "processes")  # every tool envelope's server offers
+
+
+def _native(tool: str) -> str:
+    """OpenCode names an MCP tool `<server>_<tool>`: `mcp__envelope__run` -> `envelope_run`."""
+    if tool.startswith(CANONICAL_PREFIX):
+        return f"{MCP_SERVER}_{tool.removeprefix(CANONICAL_PREFIX)}"
+    return tool
 
 
 class OpenCodeAdapter:
@@ -49,17 +57,21 @@ class OpenCodeAdapter:
     reports_tools = False
 
     def __init__(
-        self, launch: list[str] | None = None, envelope_command: list[str] | None = None
+        self,
+        launch: list[str] | None = None,
+        envelope_command: list[str] | None = None,
+        model_prompts: dict[str, str] | None = None,
     ) -> None:
         self.launch = launch or ["opencode"]
         self.envelope_command = envelope_command or ["python", "envelope.pyz"]
         self._model = ""
+        self.model_prompts = dict(model_prompts or {})
 
     def implicit_tools(self, kind: str) -> set[str]:
         return set()
 
     def visible_tools(self, kind: str, tool_set: list[str]) -> set[str] | None:
-        return set(tool_set)
+        return {_native(t) for t in tool_set}
 
     def _permissions(self, tool_set: list[str]) -> dict[str, str]:
         return {
@@ -94,7 +106,14 @@ class OpenCodeAdapter:
             "tools": {tool: tool in tool_set for tool in BUILTIN_TOOLS},
             "permission": self._permissions(tool_set),
         }
-        if any(t.startswith(f"{MCP_SERVER}_") for t in tool_set):
+        if model in self.model_prompts:
+            config["agent"] = {"build": {"prompt": self.model_prompts[model]}}
+        if any(t.startswith(CANONICAL_PREFIX) for t in tool_set):
+            # OpenCode offers every tool an MCP server lists; an arm with fewer of envelope's
+            # tools switches the others off by name (`envelope_stop`: false).
+            for tool in ENVELOPE_TOOLS:
+                if f"{CANONICAL_PREFIX}{tool}" not in tool_set:
+                    config["tools"][f"{MCP_SERVER}_{tool}"] = False
             config["mcp"] = {
                 MCP_SERVER: {
                     "type": "local",
@@ -121,8 +140,12 @@ class OpenCodeAdapter:
             str(workdir),
             "-m",
             f"{PROVIDER}/{self._model}",
-            instruction,
         ]
+
+    def stdin(self, instruction: str) -> str:
+        # OpenCode quotes argv containing spaces and coerces numeric words after `--`.
+        # Its piped-input path preserves the task verbatim.
+        return instruction
 
     def parse_trajectory(self, transcript: Path) -> Trajectory:
         """Events of `--format json`: `tool_use` parts carry the call and its result together, `text`

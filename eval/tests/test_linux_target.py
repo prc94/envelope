@@ -85,6 +85,23 @@ def test_setup_can_also_stage_envelope_pyz_and_prepare_copies_it_in(tmp_path):
     )
 
 
+def test_setup_stages_both_builds_for_an_interleaved_regression_job(tmp_path):
+    t, ssh = target()
+    current = tmp_path / "current.pyz"
+    baseline = tmp_path / "baseline.pyz"
+    current.write_bytes(b"P3a")
+    baseline.write_bytes(b"P2")
+    t.setup(current, variants={"p2": baseline})
+    ssh.test_f_result = (0, b"", b"")
+    t.prepare("regression-t00001")
+    assert any(dest.endswith("/envelope-p2.pyz") and data == b"P2" for _, dest, data in ssh.puts)
+    assert any(
+        command == "docker cp /home/envelope/eval-launcher/envelope-p2.pyz "
+        "envelope-eval-regression-t00001:/home/trial/envelope-p2.pyz"
+        for command in ssh.shell
+    )
+
+
 def test_prepare_skips_envelope_pyz_when_setup_never_staged_one():
     t, ssh = target()
     t.setup()  # no envelope_pyz argument: test_f_result stays "not found" by default
@@ -173,6 +190,7 @@ def test_run_unit_splits_the_container_out_of_cwd_and_stdout_and_reports_the_lau
         cwd=ws.workspace,
         timeout=90,
         stdout_to=f"{ws.state}/transcript.jsonl",
+        stdin_from=f"{ws.state}/instruction.txt",
     )
     assert unit.exit_code == 0 and unit.leftovers == ("42 sleep",)
     argv, _ = next(
@@ -189,6 +207,7 @@ def test_run_unit_splits_the_container_out_of_cwd_and_stdout_and_reports_the_lau
         spec["cwd"] == "/home/trial/workspace"
         and spec["stdout"] == "/home/trial/state/transcript.jsonl"
     )
+    assert spec["stdin"] == "/home/trial/state/instruction.txt"
     assert spec["env"] == {"OPENAI_MODEL": "m"}  # no container prefix leaks into the harness env
 
 

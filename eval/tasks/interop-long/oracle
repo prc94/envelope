@@ -1,1 +1,3 @@
-{{CODE}}
+[
+  {"tool": "run", "arguments": {"command": "{{CODE}}", "wait_s": 120}, "expect_exit": 0}
+]

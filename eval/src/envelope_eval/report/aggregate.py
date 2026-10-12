@@ -43,6 +43,9 @@ def _cell_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "malformed_calls": sum(
             any(e.get("kind") == "malformed_call" for e in row.get("timeline", [])) for row in rows
         ),
+        # No-tool answers can reveal either task loss by the model or a harness defect.
+        # The gateway tool-offering check determines whether the trial is scoreable.
+        "no_tool_trials": sum(row.get("tool_calls") == 0 for row in rows),
     }
 
 
@@ -116,12 +119,12 @@ def render_markdown(summary: dict[str, Any]) -> str:
     cells = summary.get("cells", {})
     main = {n: c for n, c in cells.items() if not c.get("known_gaps")}
     lines += [
-        "| Cell (lane, task, harness, model, arm) | Trials | Success (95% Wilson) | Median tokens | Malformed calls | Providers |",
-        "|---|---:|---|---:|---:|---|",
+        "| Cell (lane, task, harness, model, arm) | Trials | Success (95% Wilson) | Median tokens | Malformed calls | No-tool trials | Providers |",
+        "|---|---:|---|---:|---:|---:|---|",
     ]
     for name, cell in main.items():
         lines.append(
-            f"| {name} | {cell['count']} | {_pct(cell)} | {cell['median_tokens'] or '—'} | {cell['malformed_calls']} | {', '.join(cell['providers']) or '—'} |"
+            f"| {name} | {cell['count']} | {_pct(cell)} | {cell['median_tokens'] or '—'} | {cell['malformed_calls']} | {cell['no_tool_trials']} | {', '.join(cell['providers']) or '—'} |"
         )
     lines += _render_provider_split(summary.get("cells", {}))
     lines += _render_gaps(summary.get("known_gaps", {}), cells)

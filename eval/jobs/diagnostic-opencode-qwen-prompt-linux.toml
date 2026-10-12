@@ -1,0 +1,60 @@
+# Exploratory verification of the concise Qwen/OpenCode prompt, shared by P2 and P3a.
+# Retains all four P3a tools and the original model settings. This is not the B16 gate.
+name = "diagnostic-opencode-qwen-prompt-linux"
+seed = 20260929
+lanes = ["linux"]
+targets = ["linux"]
+harnesses = ["opencode"]
+models = ["qwen/qwen3.8-flash"]
+profile = "screening"
+trials = 3
+wall_clock_cap = 28800
+tasks = [
+    "canary",
+    "interop-basic",
+    "interop-long",
+    "interop-truncation",
+    "git-log-ticket",
+]
+
+[target.linux]
+kind = "docker"
+host = "192.168.94.41"
+user = "envelope"
+python = "python3"
+key = "~/.config/envelope-eval/linux_ed25519"
+known_hosts = "~/.config/envelope-eval/linux_known_hosts"
+image = "envelope-eval-linux:2026-09-29"
+network = "envelope-eval"
+gateway_port = 8787
+gateway_local_port = 8787
+databases = false
+[target.linux.fingerprint]
+image_digest = "sha256:d672194e49d9bab3656067d41c9c19e76d12b4e258ba5646162f6876e1e87436"
+docker_version = "26.1.5+dfsg1"
+
+[harness.qwen-code]
+adapter = "qwen-code"
+launch = ["qwen"]
+
+[harness.opencode]
+adapter = "opencode"
+launch = ["opencode"]
+
+[harness.opencode.model_prompts]
+"qwen/qwen3.8-flash" = """You are a coding agent. Complete the user's task with the available tools. Run requested commands rather than describe them. Read the tool results and return the requested answer."""
+
+[variant.p2]
+revision = "f67014f" # Last P2 commit, before the P3a implementation.
+
+[[arms]]
+name = "p3a"
+kind = "envelope"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output", "mcp__envelope__stop", "mcp__envelope__processes"]
+
+[[arms]]
+name = "p2"
+kind = "envelope"
+variant = "p2"
+tool_set = ["mcp__envelope__run", "mcp__envelope__output"]
+

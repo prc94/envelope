@@ -17,7 +17,8 @@ class Event:
 
 
 def timeline_attribution(events: list[Event]) -> Attribution:
-    if any(e.kind == "gateway_error" and e.detail.get("recovered", False) for e in events):
+    gateway_errors = [e for e in events if e.kind == "gateway_error"]
+    if gateway_errors and all(e.detail.get("recovered", False) for e in gateway_errors):
         return "model"
     evidence = Evidence(
         timed_out=any(e.kind == "timeout" for e in events),
@@ -42,7 +43,55 @@ def timeline_attribution(events: list[Event]) -> Attribution:
     return attribute(evidence)
 
 
-def lever_metrics(events: list[dict[str, Any]], trajectory: list[dict[str, Any]]) -> dict[str, Any]:
+def process_metrics(audit_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Lifecycle counts from envelope's audit, including asynchronous endings."""
+    calls = [row for row in audit_rows if row.get("event") == "tool_call"]
+    handed_back = {
+        outcome["handle"]
+        for row in calls
+        if row.get("tool") == "run"
+        and (outcome := row.get("outcome") or {}).get("state") == "running"
+        and row.get("executes") is not False
+        and isinstance(outcome.get("handle"), str)
+    }
+    ended = {
+        row["handle"]
+        for row in audit_rows
+        if row.get("event") == "process_end"
+        and row.get("end_reason") != "shutdown"
+        and isinstance(row.get("handle"), str)
+    }
+    stopped = {
+        outcome["handle"]
+        for row in calls
+        if row.get("tool") == "stop"
+        and isinstance((outcome := row.get("outcome") or {}).get("handle"), str)
+    }
+    waits = [
+        {"condition": wait.get("condition", "exit"), "outcome": wait.get("outcome")}
+        for row in calls
+        if isinstance((wait := row.get("wait") or (row.get("outcome") or {}).get("wait")), dict)
+    ]
+    return {
+        "handed_back_runs": len(handed_back),
+        "joins": sum(row.get("tool") == "run" and row.get("executes") is False for row in calls),
+        "waits": waits,
+        "stop_calls": sum(row.get("tool") == "stop" for row in calls),
+        "processes_calls": sum(row.get("tool") == "processes" for row in calls),
+        "evictions": sum(
+            row.get("event") == "process_end" and row.get("end_reason") == "eviction"
+            for row in audit_rows
+        ),
+        "notices": sum(row.get("event") == "completion_notice" for row in audit_rows),
+        "running_at_agent_end": len(handed_back - ended - stopped),
+    }
+
+
+def lever_metrics(
+    events: list[dict[str, Any]],
+    trajectory: list[dict[str, Any]],
+    audit_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     texts = [str(event.get("text", event.get("content", ""))) for event in trajectory]
     joined = "\n".join(texts)
     tool_calls = [event for event in trajectory if event.get("type") in {"tool_call", "tool_use"}]
@@ -55,6 +104,7 @@ def lever_metrics(events: list[dict[str, Any]], trajectory: list[dict[str, Any]]
     hints = [event for event in events if event.get("kind") == "hint"]
     commands = [str(event.get("arguments", {}).get("command", "")) for event in shell_calls]
     return {
+        **process_metrics(audit_rows or []),
         "truncated": "output truncated" in joined.lower() or "truncated" in joined.lower(),
         "recovery_via_output": bool(output_calls),
         "hints_shown": len(hints),

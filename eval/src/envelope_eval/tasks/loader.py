@@ -22,6 +22,8 @@ REQUIRED_FIELDS = (
     "timeout",
 )
 TOOL_NAMES = {"run", "output", "input", "stop", "tool_search", "run_shell_command"}
+CLAIM_TAGS = frozenset({"background-processes"})
+LEVER_TAGS = frozenset({"default-wait"})
 
 
 class TaskError(ValueError):
@@ -42,6 +44,14 @@ class Task:
     modifiable_paths: tuple[str, ...]
     timeout: float
     instruction: str
+
+    @property
+    def claims(self) -> frozenset[str]:
+        return frozenset(self.tags) & CLAIM_TAGS
+
+    @property
+    def levers(self) -> frozenset[str]:
+        return frozenset(self.tags) & LEVER_TAGS
 
     @property
     def hash(self) -> str:
@@ -124,9 +134,18 @@ class TaskSuite:
             "hints",
             "heavy-scripts",
             "cwd-env",
+            "background-processes",
         )
         selected = self.for_lane(lane)
         return {tag: [task.id for task in selected if tag in task.tags] for tag in required}
+
+    def coverage_report(self, lanes: tuple[str, ...] = ("linux", "windows")) -> str:
+        lines: list[str] = []
+        for lane in lanes:
+            lines.append(f"{lane}:")
+            for area, tasks in self.coverage(lane).items():
+                lines.append(f"  {area}: {', '.join(tasks) if tasks else 'UNCOVERED'}")
+        return "\n".join(lines)
 
 
 def load_suite(root: str | Path) -> TaskSuite:
