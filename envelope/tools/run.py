@@ -11,7 +11,8 @@ from typing import Any
 from envelope.audit import call_record
 from envelope.execution.backend import SpawnError
 from envelope.execution.environment import BuiltEnv, build_env
-from envelope.execution.ports import listening_ports
+from envelope.execution.ports import listening_owner, listening_ports
+from envelope.execution.quiet import quiet_hint
 from envelope.execution.runner import ManagedProcess, RunOutcome, RunRequest, start
 from envelope.execution.table import SlotsRefused, end_reason, validate_name
 from envelope.execution.wait import WaitCondition
@@ -73,16 +74,13 @@ def run_definition(services: Services) -> dict[str, Any]:
     s = services.settings
     default = services.registry.default or "none"
     description = (
-        "Run a shell command or script in a non-interactive terminal session and get its exit code "
-        f"and output. Available shells: {_shell_list(services)}. Use it for builds, tests, git, "
-        "package managers, file and system operations, bash scripts, PowerShell cmdlets and cmd. "
-        "Each call starts a fresh shell process: cd, exports and variables do NOT carry over "
-        "between calls, so pass cwd and env instead. Stdin is closed unless you pass stdin, so "
-        "interactive prompts fail fast. Multi-line scripts of any length are fine. Long output is "
-        "shortened to its first and last lines; the result then names a handle (out_...) whose "
-        "full output the `output` tool can page or grep. A command still running after wait_s is "
-        "handed back as a background process and keeps running; name a long-lived process (a "
-        "server, a watcher) to make a later call join or restart it instead of starting a copy."
+        "Run a shell command or script in a non-interactive terminal; return its exit code and "
+        f"output. Shells: {_shell_list(services)}. Supports builds, git and PowerShell. Each call "
+        "uses a fresh shell; use cwd/env for state between calls. Stdin is closed unless supplied. "
+        "If still running after wait_s, the background process keeps running under an out_... "
+        "handle. Use output to read or wait, stop to end it, and processes to list it. Name a "
+        "server or watcher to join or restart it instead of starting a copy. Use output to "
+        "retrieve lines omitted from a shortened result."
     )
     return {
         "name": "run",
@@ -93,77 +91,65 @@ def run_definition(services: Services) -> dict[str, Any]:
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "Command or multi-line script, in the syntax of the chosen shell.",
+                    "description": "Shell command or multi-line script.",
                 },
                 "shell": {
                     "type": "string",
                     "description": (
-                        f"Shell to run in (default: {default}). One of: "
+                        f"Shell (default: {default}); choose from "
                         f"{', '.join(services.registry.available_ids()) or 'none'}."
                     ),
                 },
                 "cwd": {
                     "type": "string",
-                    "description": f"Working directory (default: {services.default_cwd})."
-                    + (
-                        " Windows, C:/ or /c/ style paths are accepted." if services.windows else ""
-                    ),
+                    "description": f"Working directory (default {services.default_cwd})."
+                    + (" Windows accepts C:/ and /c/ paths." if services.windows else ""),
                 },
                 "timeout_s": {
                     "type": "number",
                     "description": (
-                        "Kills the command and everything it started, also after it was handed "
-                        "back ("
+                        "Hard deadline: kills the process tree even after hand-back ("
                         + (
                             f"default {s.default_timeout_s:g}s"
                             if s.default_timeout_s is not None
                             else "no default"
                         )
-                        + f", max {s.max_timeout_s:g}s). Omit it for servers and watchers you "
-                        "intend to keep running."
+                        + f", max {s.max_timeout_s:g}s). Omit for persistent servers/watchers."
                     ),
                 },
                 "wait_s": {
                     "type": "number",
                     "description": (
-                        f"How long to wait for the command to finish before returning a running "
-                        f"result with a handle instead (default {s.wait_default_s:g}, max "
-                        f"{s.wait_max_s:g}); the command keeps running either way. Use 0 to check "
-                        "a fast command without blocking."
+                        f"Wait before returning a running handle (default {s.wait_default_s:g}s, "
+                        f"max {s.wait_max_s:g}s). The command keeps running; 0 returns immediately."
                     ),
                 },
                 "wait_for": {
-                    "type": ["string", "object"],
+                    "oneOf": [{"type": "string"}, {"type": "object"}],
                     "description": (
-                        "Condition to wait for instead of the command finishing: 'exit' "
-                        "(default), 'regex:<pattern>' (a line matches), 'port:<n>' (the "
-                        "command listens on TCP port n) or 'idle:<seconds>' (no output for "
-                        "that long). Bounded by wait_s either way."
+                        "Wait for exit (default), regex:<pattern> in output, port:<n> listening, "
+                        "or idle:<seconds> without output. Bounded by wait_s."
                     ),
                 },
                 "name": {
                     "type": "string",
                     "description": (
-                        "Name a long-lived process (a server, watcher) so a later run() with the "
-                        "same name joins it instead of starting a copy, and output()/stop() can "
-                        "address it by name."
+                        "Process name. A later run with this name joins it; output and stop also "
+                        "accept the name."
                     ),
                 },
                 "restart": {
                     "type": "boolean",
-                    "description": (
-                        "With name: stop the process currently running under that name (if any) "
-                        "and start this command in its place."
-                    ),
+                    "description": "With name: stop its current process and start this command.",
                 },
                 "stdin": {
                     "type": "string",
-                    "description": "Text written to the command's standard input, followed by end-of-file.",
+                    "description": "Input text, then end-of-file.",
                 },
                 "env": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
-                    "description": "Extra environment variables for this call only.",
+                    "description": "Environment variables for this call.",
                 },
             },
             "required": ["command"],
@@ -313,6 +299,8 @@ class RunTool:
         wait_for_value = values.get("wait_for")
         explicit_wait_for = wait_for_value is not None
         condition: WaitCondition = wait_for_value if wait_for_value is not None else _EXIT_CONDITION
+        if explicit_wait_for:
+            record["arguments"]["wait_for"] = condition.text
         explicit_env: dict[str, str] = values.get("env", {})
         stdin: str | None = values.get("stdin")
 
@@ -511,6 +499,7 @@ class RunTool:
                 services.processes.assign_name(restart_name, managed)
             elif reserved_name is not None:
                 services.processes.finish_start(reserved_name, managed)
+            wait_started = time.monotonic()
             yielded = await _wait_or_yield(managed, wait_deadline, condition)
             if yielded.wait_result == "wait_expired" and wait_deadline >= min(
                 deadline, lifetime_deadline
@@ -522,6 +511,11 @@ class RunTool:
                 # on its own) while still short of that deadline is not a
                 # timeout, even though `outcome` is `None` for the first case.
                 yielded = await _wait_or_yield(managed, float("inf"), _EXIT_CONDITION)
+            record["wait"] = {
+                "condition": condition.text,
+                "outcome": yielded.wait_result,
+                "waited_ms": round((time.monotonic() - wait_started) * 1000),
+            }
             wait_outcome = yielded.wait_result if explicit_wait_for else None
             if (
                 wait_outcome == "condition_met"
@@ -615,6 +609,8 @@ class RunTool:
                 if pids and port in (listening_ports(pids) or frozenset()):
                     port_owner = f"{other.handle}" + (f' ("{other.name}")' if other.name else "")
                     break
+            if port_owner is None and (owner := listening_owner(port)) is not None:
+                port_owner = f"PID {owner[0]} ({owner[1]})"
         hints = hints_for(
             HintContext(
                 shell=shell.id,
@@ -680,7 +676,16 @@ class RunTool:
                 "stderr_bytes": meta.streams["stderr"].bytes,
                 "lines": meta.total_lines,
                 "hints": [h.id for h in hints],
-                **({"wait": {"outcome": wait_outcome}} if wait_outcome is not None else {}),
+                **(
+                    {
+                        "wait": {
+                            "condition": record["arguments"]["wait_for"],
+                            "outcome": wait_outcome,
+                        }
+                    }
+                    if wait_outcome is not None
+                    else {}
+                ),
             },
         )
         return ToolResult(run_text(report), run_structured(report))
@@ -723,6 +728,7 @@ class RunTool:
             unterminated_lines=_unterminated_lines(reader),
             meta=reader.meta,
             rendered=rendered,
+            hints=[hint] if (hint := quiet_hint(managed, settings.input_hint_after_s)) else [],
             notes=notes,
             name=managed.name,
             extra={"wait_outcome": wait_outcome} if wait_outcome is not None else {},
@@ -734,7 +740,16 @@ class RunTool:
                 "handle": handle,
                 "name": managed.name,
                 "duration_ms": round(elapsed * 1000),
-                **({"wait": {"outcome": wait_outcome}} if wait_outcome is not None else {}),
+                **(
+                    {
+                        "wait": {
+                            "condition": record["arguments"]["wait_for"],
+                            "outcome": wait_outcome,
+                        }
+                    }
+                    if wait_outcome is not None
+                    else {}
+                ),
             },
         )
         return ToolResult(run_text(report), run_structured(report))
@@ -763,7 +778,13 @@ class RunTool:
             )
         record["decision"] = None
         record["executes"] = False
+        wait_started = time.monotonic()
         result = await live.wait_condition(condition, wait_deadline)
+        record["wait"] = {
+            "condition": condition.text,
+            "outcome": result,
+            "waited_ms": round((time.monotonic() - wait_started) * 1000),
+        }
         wait_outcome = result if explicit_wait_for else None
         live_shell = services.registry.resolve(live.request.shell_id)
         if live.outcome is None:

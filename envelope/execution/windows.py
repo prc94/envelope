@@ -217,6 +217,18 @@ if sys.platform == "win32":
             return -1
         return int(info.ActiveProcesses)
 
+    def job_cpu_seconds(job: int) -> float | None:
+        info = _Accounting()
+        if not _kernel32.QueryInformationJobObject(
+            job,
+            JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+            None,
+        ):
+            return None
+        return (info.TotalUserTime + info.TotalKernelTime) / 10_000_000
+
     def close_handle(handle: int) -> None:
         _kernel32.CloseHandle(handle)
 
@@ -381,6 +393,41 @@ class WindowsProcess:
             if self._closed:
                 return frozenset()
             return job_pids(self._job)
+
+    def cpu_seconds(self) -> float | None:
+        if sys.platform != "win32":
+            return None
+        with self._lock:
+            return None if self._closed else job_cpu_seconds(self._job)
+
+    def console_line(self) -> str | None:
+        """Read a hidden prompt through a detached helper (design B12)."""
+        if sys.platform != "win32":
+            return None
+        members = self.tree_pids()
+        if not members:
+            return None
+        source = (
+            resources.files("envelope.execution")
+            .joinpath("_console_text.py")
+            .read_text(encoding="utf-8")
+        )
+        for pid in members:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-I", "-S", "-c", source, str(pid)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=DETACHED_PROCESS,
+                    timeout=1,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if result.returncode == 0:
+                return result.stdout.decode("utf-8", "replace").strip() or None
+        return None
 
     def request_graceful_stop(self) -> bool:
         if sys.platform != "win32":

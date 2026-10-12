@@ -136,6 +136,9 @@ class ManagedProcess:
         """Set by the most recent `port:` wait that matched: ``True`` when
         ownership was attributed to this tree, ``False`` when only the
         unverified `connect` fallback succeeded (design B5)."""
+        self.cpu_quiet_since: float | None = None
+        """Set by the process table's periodic CPU sampler; None means unknown."""
+        self.cpu_last_seconds: float | None = None
         self._done = asyncio.Event()
         self._finisher: asyncio.Task[None] | None = None
 

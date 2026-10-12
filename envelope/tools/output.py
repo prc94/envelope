@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from envelope.audit import call_record
+from envelope.execution.quiet import quiet_hint
 from envelope.execution.wait import WaitCondition
 from envelope.output.spool import HandleError, SpoolView
 from envelope.output.view import (
@@ -52,50 +53,47 @@ def output_definition() -> dict[str, Any]:
         "name": "output",
         "title": "Read command output",
         "description": (
-            "Read the full, saved output of an earlier `run` shell command by its handle (out_...), "
-            "for example when the terminal output shown in the run result was truncated. With no "
-            "tail/offset/grep argument, returns lines not yet shown by a previous `output` call on "
-            f"this handle (or the last {DEFAULT_TAIL} lines if none were shown yet). Otherwise choose "
-            f"ONE explicit mode: tail (last N lines), offset+limit (1-based line range, limit "
-            f"defaults to {DEFAULT_LIMIT}), or grep (Python regular expression) with optional context "
-            "lines. stream selects stdout, stderr or both (default). Lines are returned with their "
-            "line numbers."
+            "Read saved run output by handle or name, including lines omitted from a shortened "
+            f"result. No mode returns unread lines (or the last {DEFAULT_TAIL} if none). Choose "
+            f"one mode: tail, offset+limit (1-based; default limit {DEFAULT_LIMIT}), or regex "
+            "grep+context. stream selects stdout, stderr or both. wait_s/wait_for can wait before "
+            "reading. Lines include line numbers."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "handle": {
                     "type": "string",
-                    "description": "Output handle from a run result, e.g. out_91c2ab04.",
+                    "description": "Run handle (out_...) or process name.",
                 },
-                "tail": {"type": "integer", "description": "Return the last N lines."},
-                "offset": {"type": "integer", "description": "First line to return (1-based)."},
+                "tail": {"type": "integer", "description": "Last N lines."},
+                "offset": {"type": "integer", "description": "First line (1-based)."},
                 "limit": {
                     "type": "integer",
-                    "description": "Number of lines to return from offset.",
+                    "description": "Lines from offset.",
                 },
                 "grep": {
                     "type": "string",
-                    "description": "Regular expression; returns matching lines.",
+                    "description": "Regex for matching lines.",
                 },
                 "context": {
                     "type": "integer",
-                    "description": "Lines of context around each grep match.",
+                    "description": "Context lines around grep matches.",
                 },
                 "stream": {
                     "type": "string",
                     "enum": ["both", "stdout", "stderr"],
-                    "description": "Which stream to read (default both).",
+                    "description": "Stream (default both).",
                 },
                 "wait_s": {
                     "type": "number",
-                    "description": "Wait this long for wait_for (or the process exiting) before reading.",
+                    "description": "Seconds to wait before reading; default condition is exit.",
                 },
                 "wait_for": {
-                    "type": ["string", "object"],
+                    "oneOf": [{"type": "string"}, {"type": "object"}],
                     "description": (
-                        "Condition to wait for before reading: 'exit' (default), "
-                        "'regex:<pattern>', 'port:<n>' or 'idle:<seconds>'."
+                        "Wait condition: exit (default), regex:<pattern>, port:<n>, or "
+                        "idle:<seconds>."
                     ),
                 },
             },
@@ -122,6 +120,7 @@ class OutputTool:
         return self._definition
 
     async def call(self, arguments: dict[str, Any], ctx: CallContext) -> ToolResult:
+        started = time.monotonic()
         coercions: list[dict[str, Any]] = list(ctx.extra.get("coercions", []))
         try:
             values, more = coerce(arguments, PARAMS)
@@ -142,14 +141,35 @@ class OutputTool:
         structured = dict(view.structured)
         self._add_process_state(structured, resolved)
         text = view.text
+        managed = self.services.processes.get(resolved)
+        if managed is not None and (
+            hint := quiet_hint(managed, self.services.settings.input_hint_after_s)
+        ):
+            text = f"{text}\n{hint.text}"
+            structured["hints"] = [*structured.get("hints", []), hint.id]
         if wait_outcome is not None:
             structured["wait_outcome"] = wait_outcome
             text = f"{text}\n{_WAIT_OUTCOME_NOTES[wait_outcome]}"
         self._audit(
             ctx,
-            values,
+            {**values, **({"wait_for": values["wait_for"].text} if "wait_for" in values else {})},
             coercions,
-            {k: structured.get(k) for k in ("handle", "mode", "truncated")},
+            {
+                **{k: structured.get(k) for k in ("handle", "mode", "truncated")},
+                **(
+                    {
+                        "wait": {
+                            "condition": values["wait_for"].text
+                            if "wait_for" in values
+                            else "exit",
+                            "outcome": wait_outcome,
+                            "waited_ms": round((time.monotonic() - started) * 1000),
+                        }
+                    }
+                    if wait_outcome is not None
+                    else {}
+                ),
+            },
         )
         return self.services.attach_notice(ToolResult(text, structured))
 

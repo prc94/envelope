@@ -7,8 +7,10 @@ from typing import Any
 
 from envelope.audit import call_record
 from envelope.execution.ports import listening_ports
+from envelope.execution.quiet import quiet_hint
 from envelope.execution.runner import ManagedProcess
 from envelope.protocol.server import CallContext, ToolResult
+from envelope.render.hints import Hint
 from envelope.render.result import format_duration
 from envelope.services import Services
 from envelope.tools.coercion import ArgumentError, Param, coerce
@@ -21,17 +23,16 @@ def processes_definition(limit: int) -> dict[str, Any]:
         "name": "processes",
         "title": "List background processes",
         "description": (
-            "List background processes started by run() in this session: by default those still "
-            "running and those that finished without their result being read yet; with all: true, "
-            f"every one whose output handle is still valid. Shows at most {limit} entries, running "
-            "first."
+            "List background processes from this session, running first. By default include "
+            "running and finished processes with unseen results; all: true includes every "
+            f"valid handle. At most {limit} entries."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "all": {
                     "type": "boolean",
-                    "description": "Include processes already reported as finished (default: false).",
+                    "description": "Include already reported processes (default false).",
                 },
             },
         },
@@ -50,7 +51,7 @@ def _shorten(text: str, limit: int = 80) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _entry(managed: ManagedProcess, now: float) -> dict[str, Any]:
+def _entry(managed: ManagedProcess, now: float, hint: Hint | None = None) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "handle": managed.handle,
         "command": _shorten(managed.request.command),
@@ -73,6 +74,8 @@ def _entry(managed: ManagedProcess, now: float) -> dict[str, Any]:
                 entry["ports"] = sorted(ports)
     if managed.writer.last_line:
         entry["last_line"] = _shorten(managed.writer.last_line)
+    if hint is not None:
+        entry["hints"] = [hint.id]
     return entry
 
 
@@ -111,6 +114,8 @@ class ProcessesTool:
         ordered = running + finished
         shown = ordered[:limit]
         left_out = len(ordered) - len(shown)
+        hints = [quiet_hint(m, self.services.settings.input_hint_after_s) for m in shown]
+        entries = [_entry(m, now, hint) for m, hint in zip(shown, hints, strict=True)]
         for managed in shown:
             if managed.finished:
                 managed.final_seen = True
@@ -119,7 +124,7 @@ class ProcessesTool:
             text = "no processes are running"
         else:
             lines = [f"{len(shown)} process{'es' if len(shown) != 1 else ''}:"]
-            for entry in (_entry(m, now) for m in shown):
+            for entry in entries:
                 state = (
                     f"exit {entry['exit_code']}"
                     if entry["state"] == "ended" and entry.get("signal") is None
@@ -141,12 +146,15 @@ class ProcessesTool:
                 lines.append(" | ".join(bits))
             if left_out:
                 lines.append(f"note: {left_out} more not shown")
+            for managed, hint in zip(shown, hints, strict=True):
+                if hint is not None:
+                    lines.append(f"{managed.handle}: {hint.text}")
             text = "\n".join(lines)
 
         structured = {
             "count": len(shown),
             "left_out": left_out,
-            "processes": [_entry(m, now) for m in shown],
+            "processes": entries,
         }
         self._audit(ctx, values, coercions, {"count": len(shown), "left_out": left_out})
         return self.services.attach_notice(ToolResult(text, structured))

@@ -793,6 +793,10 @@ def current_owner() -> tuple[int, int | None]:
 def _owner_alive(pid: int, start_ticks: int | None) -> bool:
     """Best-effort liveness check for a spool's recorded owner: exists, and
     (where verifiable) still the same process rather than a reused PID."""
+    if sys.platform == "win32":
+        from envelope.output._windows_owner import owner_alive
+
+        return owner_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

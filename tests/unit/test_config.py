@@ -1,4 +1,5 @@
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ def test_defaults_match_specs() -> None:
 
 
 def test_no_config_file_uses_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA" if sys.platform == "win32" else "XDG_CONFIG_HOME", str(tmp_path))
     result = load(environ={})
     assert result.config_file is None
     assert result.settings == Settings()

@@ -728,6 +728,40 @@ def test_port_in_use_hint_names_envelope_owner(client: StdioClient) -> None:
     assert "web" in text(conflict) and str(port) in text(conflict)
 
 
+def test_quiet_listening_server_has_no_quiet_hint(tmp_path: Path) -> None:
+    client = StdioClient(tmp_path, config='default_shell = "bash"\ninput_hint_after_s = 0.2\n')
+    client.initialize()
+    try:
+        port = random.randint(20000, 40000)
+        started = client.run(
+            f"python3 -m http.server {port} --bind 127.0.0.1",
+            wait_for=f"port:{port}",
+            wait_s=4,
+        )
+        assert started["structuredContent"]["state"] == "running"
+        time.sleep(4)
+        result = client.tool("output", {"handle": started["structuredContent"]["handle"]})
+        assert "no_output_yet" not in result["structuredContent"].get("hints", [])
+        assert "console_prompt" not in result["structuredContent"].get("hints", [])
+    finally:
+        client.close()
+
+
+def test_quiet_process_reports_no_output_yet(tmp_path: Path) -> None:
+    client = StdioClient(tmp_path, config='default_shell = "bash"\ninput_hint_after_s = 0.2\n')
+    client.initialize()
+    try:
+        started = client.run("sleep 20", wait_s=2.5)
+        assert started["structuredContent"]["state"] == "running"
+        result = client.tool("output", {"handle": started["structuredContent"]["handle"]})
+        assert "no_output_yet" in result["structuredContent"].get("hints", [])
+        assert "buffer" in text(result)
+        listed = client.tool("processes", {})
+        assert "no_output_yet" in listed["structuredContent"]["processes"][0].get("hints", [])
+    finally:
+        client.close()
+
+
 # --- audit records (design B15, task 7.5) --------------------------------------------------
 
 

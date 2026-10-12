@@ -69,6 +69,34 @@ def listening_ports(pids: frozenset[int]) -> frozenset[int] | None:
     return None  # macOS: documented limitation (design risk list)
 
 
+def listening_owner(port: int) -> tuple[int, str] | None:
+    """Best-effort owner of a listening port; unknown on inaccessible hosts."""
+    if not sys.platform.startswith("linux"):
+        return None
+    inodes = {inode for inode, value in _linux_listening_inodes().items() if value == port}
+    if not inodes:
+        return None
+    for process in Path("/proc").iterdir():
+        if not process.name.isdigit():
+            continue
+        try:
+            descriptors = list((process / "fd").iterdir())
+        except OSError:
+            continue
+        for descriptor in descriptors:
+            try:
+                target = descriptor.readlink().as_posix()
+            except OSError:
+                continue
+            if target.startswith("socket:[") and target[8:-1] in inodes:
+                try:
+                    name = (process / "comm").read_text().strip()
+                except OSError:
+                    name = "process"
+                return int(process.name), name
+    return None
+
+
 def port_reachable(port: int, *, timeout: float = 0.2) -> bool:
     """Unverified fallback (design B5): used only where ``listening_ports()``
     returned ``None``, so the result states that ownership was not verified.

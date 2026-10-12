@@ -82,6 +82,7 @@ class Services:
             f"note: {managed.handle}{name_part} {status} ({end_reason(managed)}) "
             f"after {outcome.duration_s:.1f}s -- {command}"
         )
+        self.audit.write({"event": "completion_notice", "handle": managed.handle})
         self.finalize_process(managed)
         return text
 

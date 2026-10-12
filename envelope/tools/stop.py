@@ -25,22 +25,21 @@ def stop_definition(settings: Settings) -> dict[str, Any]:
         "name": "stop",
         "title": "Stop a background process",
         "description": (
-            "Terminate a background process started by run() (by its out_... handle or name): "
-            "requests a graceful stop, waits grace_s, then forces it. Safe to call on a process "
-            "that has already finished."
+            "Stop a background process by run handle or name. Request a graceful stop, then "
+            "force termination after grace_s. Also accepts an already finished process."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "handle": {
                     "type": "string",
-                    "description": "Output handle or name from a run result.",
+                    "description": "Run handle (out_...) or process name.",
                 },
                 "grace_s": {
                     "type": "number",
                     "description": (
-                        f"Seconds to wait for a graceful exit before forcing it "
-                        f"(default {settings.stop_grace_s:g}, max {settings.stop_grace_max_s:g})."
+                        "Grace period before force ("
+                        f"default {settings.stop_grace_s:g}s, max {settings.stop_grace_max_s:g}s)."
                     ),
                 },
             },

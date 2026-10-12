@@ -322,6 +322,7 @@ def test_live_reader_degrades_to_dropped_when_a_segment_file_is_missing_under_it
 
     # simulate a foreign deletion race that pinning alone cannot close (e.g. a
     # segment vanishing between taking the snapshot and pinning it)
+    writer.finish()  # Windows cannot unlink a file while this writer holds it open.
     for kind in ("frames", "lines", "index"):
         (writer.dir / f"{kind}-0.bin").unlink()
 
@@ -440,6 +441,7 @@ def test_second_manager_cleanup_removes_a_stale_owner(tmp_path: Path) -> None:
     mgr1 = manager(tmp_path, total=300_000)
     writer = mgr1.create({}, fallback_codepage=None)
     writer.add(STDOUT, b"orphaned\n")
+    writer.finish()  # A dead owner has released its file handles on Windows.
 
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()

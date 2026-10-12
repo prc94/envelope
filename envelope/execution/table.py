@@ -17,6 +17,7 @@ import re
 import time
 
 from envelope.audit import AuditLog
+from envelope.execution.cpu import tree_cpu_seconds
 from envelope.execution.runner import ManagedProcess
 
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
@@ -79,10 +80,28 @@ class ProcessTable:
         self._name_locks: dict[str, asyncio.Lock] = {}
         """Serializes `restart: true` per name (design B6): held across the
         stop of the old process and the start of the new one."""
+        self._samplers: set[asyncio.Task[None]] = set()
 
     def register(self, managed: ManagedProcess) -> None:
         managed.on_finish = self._on_process_finished
         self._by_handle[managed.handle] = managed
+        sampler = asyncio.create_task(self._sample_cpu(managed))
+        self._samplers.add(sampler)
+        sampler.add_done_callback(self._samplers.discard)
+
+    async def _sample_cpu(self, managed: ManagedProcess) -> None:
+        """Keep a tri-state quiet interval for live processes (design B12)."""
+        while not managed.finished:
+            sample = tree_cpu_seconds(managed.process)
+            now = time.monotonic()
+            previous = managed.cpu_last_seconds
+            if sample is None:
+                managed.cpu_quiet_since = None
+                managed.cpu_last_seconds = None
+            elif previous is None or sample > previous:
+                managed.cpu_last_seconds = sample
+                managed.cpu_quiet_since = now
+            await asyncio.sleep(2)
 
     def forget(self, handle: str) -> None:
         managed = self._by_handle.pop(handle, None)

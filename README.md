@@ -7,7 +7,7 @@ CPython 3.12+ interpreter with no installation, no third-party packages and no n
 so it also works on locked-down Windows machines (AppLocker/WDAC, Constrained Language Mode,
 GPO execution policy) where downloaded executables are blocked.
 
-Two tools:
+Four tools:
 
 - **`run`**: runs a command or multi-line script in a fresh shell process, with `cwd`,
   `timeout_s`, `stdin` and `env`. It returns a one-line header (`exit 1 | 2.3s | git-bash | cwd C:\src\app`),
@@ -15,7 +15,9 @@ Two tools:
   kept within a budget) and deterministic hints (command not found in this shell but available in
   another one, killed by SIGKILL, blocked by application control, …).
 - **`output`**: pages, tails or greps the complete saved output of a previous `run`, using the handle
-  (`out_1a2b3c4d`) given in its result.
+  (`out_1a2b3c4d`) given in its result. It also waits for a running command.
+- **`stop`**: stops a running command by handle or name.
+- **`processes`**: lists running commands and their status.
 
 ## Installation
 
