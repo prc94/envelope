@@ -355,6 +355,31 @@ upstream HTTP 429 responses for DeepSeek (DeepInfra shared-pool rate limiting). 
 retains its existing per-model cooldown and bounded deferral; unavailable trials cannot be
 used as a non-inferiority verdict.
 
+Completed follow-up reports (reviewed 2026-10-13): both services have stopped and all planned
+trial indices are recorded. Linux finished at 2026-10-13 00:35:39 UTC: 252 rows, 156 passes,
+22 failures and 74 unavailable trials, all unavailable rows belonging to DeepSeek. Windows
+finished at 2026-10-12 19:48:18 UTC: 180 rows, 110 passes, 10 failures and all 60 DeepSeek
+trials unavailable. Every worker exited 2 because scored coverage was incomplete; both provider
+credential scans were clean. These are completed attempts, not complete acceptance evidence.
+
+The Linux partial report's success condition is met (effect +0.0357, 95% interval
+[-0.0357, +0.1190]), but its token condition is not met (effect -0.3185, interval
+[-0.6258, -0.1122]). The Windows partial report is inconclusive on both success (effect 0,
+interval [-0.1000, +0.0833]) and tokens (effect -0.1146, interval [-0.3468, +0.0560]).
+Neither lane is accepted. Provider errors also affected scored DeepSeek rows on Linux: nine
+of its ten scored rows failed and timed out with failed requests and no tool calls. Such rows
+and the missing model coverage prevent these partial verdicts from establishing a clean
+product comparison. Investigate token overhead and provider-failure handling before claiming
+non-inferiority; do not relax the margins or pool unavailable rows as model failures.
+
+The focused OpenCode/Qwen profile held up on the full Linux slice: P3a 21/21 and P2 21/21,
+including Redis and duplicate-file tasks beyond the pilot. GLM/OpenCode scored P3a 20/21 versus
+P2 21/21. The targeted task-loss intervention remains supported for the explicit concise
+profile, while B16 acceptance remains open (46/47 tasks complete). Local copies of the clean
+reports are `eval/results/followup-20261012/{linux,windows}/report/`, with each run's
+`status.json` and build-provenance snapshot alongside. No new evaluation run was started
+when reviewing these outcomes.
+
 ## Risks / Trade-offs
 
 - [Behaviour change: commands over 30 s now return a handle; a model that ignores it may answer without the result] → running results end with literal next calls and "do not start it again"; `interop-long`, `build-outlives-wait` and `long-wait` measure it; `wait_default_s` can be raised.
