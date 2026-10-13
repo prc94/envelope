@@ -21,6 +21,10 @@ Four tools:
 
 ## Installation
 
+For the release-candidate installation guide and client configuration, see
+[INSTALL.md](docs/INSTALL.md). Release notes are in
+[docs/releases](docs/releases).
+
 Download `envelope.pyz` (or build it: `python3 scripts/build.py` → `dist/envelope.pyz`) and run
 it with Python 3.12 or newer (`python3` on Linux/macOS; `python` or `py` on Windows, where a bare
 `python3` often does not exist):

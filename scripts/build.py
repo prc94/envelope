@@ -35,6 +35,7 @@ def build(output: Path) -> Path:
             staging / "envelope",
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+        shutil.copyfile(ROOT / "LICENSE", staging / "LICENSE")
         (staging / "__main__.py").write_text(MAIN, encoding="utf-8")
         output.parent.mkdir(parents=True, exist_ok=True)
         zipapp.create_archive(
